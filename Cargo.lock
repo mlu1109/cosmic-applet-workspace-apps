@@ -966,12 +966,15 @@ dependencies = [
 name = "cosmic-applet-workspaces-apps"
 version = "0.1.0"
 dependencies = [
+ "cosmic-freedesktop-icons",
+ "futures-channel",
  "futures-util",
  "i18n-embed",
  "i18n-embed-fl",
  "libcosmic",
  "rust-embed",
  "tokio",
+ "wayland-protocols",
 ]
 
 [[package]]
