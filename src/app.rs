@@ -2,12 +2,19 @@
 
 use crate::config::Config;
 use crate::fl;
+use crate::wayland_subscription::{self, WorkspaceEvent, WorkspaceInfo, ToplevelAppInfo};
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
-use cosmic::iced::{window::Id, Limits, Subscription};
+use cosmic::iced::{window::Id, Length, Limits, Subscription};
 use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
+use cosmic::iced::event::{wayland::Event as WaylandEvent, PlatformSpecific};
 use cosmic::prelude::*;
 use cosmic::widget;
+use cosmic::cctk::wayland_client::{Connection, Proxy};
 use futures_util::SinkExt;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use cosmic::Action::App;
+use cosmic::iced_widget::button;
 
 /// The application model stores app-specific state used to describe its interface and
 /// drive its logic.
@@ -21,6 +28,14 @@ pub struct AppModel {
     config: Config,
     /// Example row toggler.
     example_row: bool,
+    /// Wayland connection for workspace subscription
+    wayland_conn: Option<Connection>,
+    /// Current workspaces
+    workspaces: Vec<WorkspaceInfo>,
+    /// Current toplevels/applications
+    toplevels: HashMap<String, ToplevelAppInfo>,
+    /// App icon cache
+    app_icons: HashMap<String, PathBuf>,
 }
 
 /// Messages emitted by the application and its widgets.
@@ -31,6 +46,9 @@ pub enum Message {
     SubscriptionChannel,
     UpdateConfig(Config),
     ToggleExampleRow(bool),
+    WaylandEvent(WaylandEvent),
+    WorkspaceEvent(WorkspaceEvent),
+    IconLoaded(String, PathBuf),
 }
 
 /// Create a COSMIC application from the app model
@@ -91,10 +109,52 @@ impl cosmic::Application for AppModel {
     /// This view should emit messages to toggle the applet's popup window, which will
     /// be drawn using the `view_window` method.
     fn view(&self) -> Element<'_, Self::Message> {
-        self.core
-            .applet
-            .icon_button("display-symbolic")
-            .on_press(Message::TogglePopup)
+        let mut row = widget::row().spacing(4).padding([0, 8]);
+        // Display each workspace with its number and app icons
+        row = row.push("Test");
+        for workspace in &self.workspaces {
+            let workspace_num = if !workspace.coordinates.is_empty() {
+                workspace.coordinates[0] + 1
+            } else {
+                0
+            };
+
+            // Create workspace number button
+            let ws_button = button(
+                widget::text(format!("{}", workspace_num))
+                    .size(14)
+            )
+            .padding([2, 6]);
+                //.style(cosmic::theme::Button::Text);
+            row = row.push(ws_button);
+
+            // Add app icons for this workspace
+            for toplevel_desc in &workspace.top_levels {
+                // Extract app_id from "app_id: title" format
+                if let Some(app_id) = toplevel_desc.split(':').next() {
+                    let app_id = app_id.trim();
+
+                    if let Some(icon_path) = self.app_icons.get(app_id) {
+                        let icon = widget::icon::from_path(icon_path.clone()).icon().size(16);
+                        row = row.push(icon);
+                    } else {
+                        // Show a placeholder or text if icon not loaded
+                        let placeholder = widget::text(app_id.chars().next().unwrap_or('?').to_string())
+                            .size(12);
+                        row = row.push(placeholder);
+                    }
+                }
+            }
+
+            // Add separator between workspaces
+            if workspace_num < self.workspaces.len() as u32 {
+                row = row.push(widget::text("|").size(12));
+            }
+        }
+        row = row.width(Length::Fill);
+        widget::container(row)
+            .width(Length::Fill)
+            .padding([4, 8])
             .into()
     }
 
@@ -121,8 +181,9 @@ impl cosmic::Application for AppModel {
     /// continue to execute for the duration that they remain in the batch.
     fn subscription(&self) -> Subscription<Self::Message> {
         struct MySubscription;
+        struct WaylandEventsSubscription;
 
-        Subscription::batch(vec![
+        let mut subscriptions = vec![
             // Create a subscription which emits updates through a channel.
             Subscription::run_with_id(
                 std::any::TypeId::of::<MySubscription>(),
@@ -142,7 +203,24 @@ impl cosmic::Application for AppModel {
 
                     Message::UpdateConfig(update.config)
                 }),
-        ])
+            // Listen for Wayland events to get the connection
+            cosmic::iced::event::listen_with(|evt, _, _| match evt {
+                cosmic::iced::Event::PlatformSpecific(PlatformSpecific::Wayland(evt)) => {
+                    Some(Message::WaylandEvent(evt))
+                }
+                _ => None,
+            }),
+        ];
+
+        // Add workspace subscription if we have a connection
+        if let Some(conn) = &self.wayland_conn {
+            subscriptions.push(
+                wayland_subscription::workspace_subscription(conn.clone())
+                    .map(Message::WorkspaceEvent)
+            );
+        }
+
+        Subscription::batch(subscriptions)
     }
 
     /// Handles messages emitted by the application and its widgets.
@@ -159,6 +237,71 @@ impl cosmic::Application for AppModel {
                 self.config = config;
             }
             Message::ToggleExampleRow(toggled) => self.example_row = toggled,
+            Message::WaylandEvent(evt) => {
+                // Extract Wayland connection from the event
+                if self.wayland_conn.is_none() {
+                    if let WaylandEvent::Output(_evt, output) = evt {
+                        if let Some(backend) = output.backend().upgrade() {
+                            self.wayland_conn = Some(Connection::from_backend(backend));
+                        }
+                    }
+                }
+            }
+            Message::WorkspaceEvent(WorkspaceEvent::WorkspacesChanged(workspaces)) => {
+                self.workspaces = workspaces;
+                println!("Workspaces updated: {} workspaces", self.workspaces.len());
+
+                // Collect all app_ids that need icons
+                let mut app_ids_to_load = Vec::new();
+                for ws in &self.workspaces {
+                    println!("  - {} (coords: {:?})", ws.name, ws.coordinates);
+                    for app in &ws.top_levels {
+                        println!("    -> {}", app);
+                        if let Some(app_id) = app.split(':').next() {
+                            let app_id = app_id.trim().to_string();
+                            if !self.app_icons.contains_key(&app_id) {
+                                app_ids_to_load.push(app_id);
+                            }
+                        }
+                    }
+                }
+
+                // Load icons asynchronously
+                let tasks: Vec<_> = app_ids_to_load.into_iter().map(|app_id| {
+                    Task::perform(
+                        load_app_icon(app_id.clone()),
+                        move |path| App(Message::IconLoaded(app_id.clone(), path))
+                    )
+                }).collect();
+                return Task::batch(tasks);
+            }
+            Message::WorkspaceEvent(WorkspaceEvent::ToplevelAdded(toplevel)) => {
+                println!("Toplevel added: {} - {} (workspaces: {:?})",
+                    toplevel.app_id, toplevel.title, toplevel.workspaces);
+                self.toplevels.insert(toplevel.id.clone(), toplevel.clone());
+
+                // Load icon if not already loaded
+                if !self.app_icons.contains_key(&toplevel.app_id) {
+                    let app_id = toplevel.app_id.clone();
+                    return Task::perform(
+                        load_app_icon(app_id.clone()),
+                        move |path| App(Message::IconLoaded(app_id.clone(), path))
+                    );
+                }
+            }
+            Message::WorkspaceEvent(WorkspaceEvent::ToplevelUpdated(toplevel)) => {
+                println!("Toplevel updated: {} - {} (workspaces: {:?})",
+                    toplevel.app_id, toplevel.title, toplevel.workspaces);
+                self.toplevels.insert(toplevel.id.clone(), toplevel);
+            }
+            Message::WorkspaceEvent(WorkspaceEvent::ToplevelRemoved(id)) => {
+                println!("Toplevel removed: {}", id);
+                self.toplevels.remove(&id);
+            }
+            Message::IconLoaded(app_id, path) => {
+                println!("Icon loaded for {}: {:?}", app_id, path);
+                self.app_icons.insert(app_id, path);
+            }
             Message::TogglePopup => {
                 return if let Some(p) = self.popup.take() {
                     destroy_popup(p)
@@ -192,4 +335,22 @@ impl cosmic::Application for AppModel {
     fn style(&self) -> Option<cosmic::iced_runtime::Appearance> {
         Some(cosmic::applet::style())
     }
+}
+
+async fn load_app_icon(app_id: String) -> PathBuf {
+    tokio::task::spawn_blocking(move || {
+        freedesktop_icons::lookup(&app_id)
+            .with_size(16)
+            .with_cache()
+            .find()
+            .unwrap_or_else(|| {
+                freedesktop_icons::lookup("application-default")
+                    .with_size(16)
+                    .with_cache()
+                    .find()
+                    .unwrap_or_default()
+            })
+    })
+    .await
+    .unwrap_or_default()
 }
