@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=Cosmic Applet Workspaces Apps
+Comment=An application for the COSMIC™ desktop
+Type=Application
+Icon=com.github.mlu1109.cosmic-applet-workspace-apps
+Exec=cosmic-applet-workspaces-apps %F
+Terminal=false
+StartupNotify=true
+Categories=COSMIC
+Keywords=COSMIC
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto
+MimeType=
