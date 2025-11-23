@@ -13,8 +13,13 @@ use cosmic::cctk::wayland_client::{Connection, Proxy};
 use futures_util::SinkExt;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use cosmic::Action::App;
+use cosmic::applet::Size;
+use cosmic::iced_core::Layout;
 use cosmic::iced_widget::button;
+
+static AUTOSIZE_MAIN_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("autosize-main"));
 
 /// The application model stores app-specific state used to describe its interface and
 /// drive its logic.
@@ -75,7 +80,7 @@ impl cosmic::Application for AppModel {
 
     /// Initializes the application with any given flags and startup commands.
     fn init(
-        core: cosmic::Core,
+        mut core: cosmic::Core,
         _flags: Self::Flags,
     ) -> (Self, Task<cosmic::Action<Self::Message>>) {
         // Construct the app model with the runtime's core.
@@ -109,9 +114,8 @@ impl cosmic::Application for AppModel {
     /// This view should emit messages to toggle the applet's popup window, which will
     /// be drawn using the `view_window` method.
     fn view(&self) -> Element<'_, Self::Message> {
-        let mut row = widget::row().spacing(4).padding([0, 8]);
-        // Display each workspace with its number and app icons
-        row = row.push("Test");
+        let mut row = widget::row().spacing(4);
+
         for workspace in &self.workspaces {
             let workspace_num = if !workspace.coordinates.is_empty() {
                 workspace.coordinates[0] + 1
@@ -119,18 +123,14 @@ impl cosmic::Application for AppModel {
                 0
             };
 
-            // Create workspace number button
             let ws_button = button(
                 widget::text(format!("{}", workspace_num))
                     .size(14)
             )
             .padding([2, 6]);
-                //.style(cosmic::theme::Button::Text);
             row = row.push(ws_button);
 
-            // Add app icons for this workspace
             for toplevel_desc in &workspace.top_levels {
-                // Extract app_id from "app_id: title" format
                 if let Some(app_id) = toplevel_desc.split(':').next() {
                     let app_id = app_id.trim();
 
@@ -138,7 +138,6 @@ impl cosmic::Application for AppModel {
                         let icon = widget::icon::from_path(icon_path.clone()).icon().size(16);
                         row = row.push(icon);
                     } else {
-                        // Show a placeholder or text if icon not loaded
                         let placeholder = widget::text(app_id.chars().next().unwrap_or('?').to_string())
                             .size(12);
                         row = row.push(placeholder);
@@ -146,16 +145,27 @@ impl cosmic::Application for AppModel {
                 }
             }
 
-            // Add separator between workspaces
             if workspace_num < self.workspaces.len() as u32 {
                 row = row.push(widget::text("|").size(12));
             }
         }
-        row = row.width(Length::Fill);
-        widget::container(row)
-            .width(Length::Fill)
-            .padding([4, 8])
-            .into()
+        
+        let mut limits = Limits::NONE.min_width(1.).min_height(1.);
+        if let Some(b) = self.core.applet.suggested_bounds {
+            if b.width as i32 > 0 {
+                limits = limits.max_width(b.width);
+            }
+            if b.height as i32 > 0 {
+                limits = limits.max_height(b.height);
+            }
+        }
+
+        widget::autosize::autosize(
+            widget::container(row).padding(0),
+            AUTOSIZE_MAIN_ID.clone(),
+        )
+        .limits(limits)
+        .into()
     }
 
     /// The applet's popup window will be drawn using this view method. If there are
