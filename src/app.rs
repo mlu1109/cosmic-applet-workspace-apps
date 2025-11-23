@@ -83,15 +83,36 @@ impl AppModel {
         
         content = content.push(text);
 
-        for toplevel_desc in &workspace.top_levels {
-            if let Some(app_id) = toplevel_desc.split(':').next() {
-                let app_id = app_id.trim();
+        for toplevel_id in &workspace.top_levels {
+            if let Some(toplevel_info) = self.toplevels.get(toplevel_id) {
+                let app_id = &toplevel_info.app_id;
+                let is_active = toplevel_info.is_active;
 
                 if let Some(icon_path) = self.app_icons.get(app_id) {
                     let icon = widget::icon::from_path(icon_path.clone())
                         .icon()
                         .size(icon_size);
-                    content = content.push(icon);
+                    
+                    let icon_element: Element<'_, Message> = if is_active {
+                        widget::container(icon)
+                            .style(move |theme| {
+                                let cosmic = theme.cosmic();
+                                widget::container::Style {
+                                    background: None,
+                                    text_color: None,
+                                    border: cosmic::iced_core::Border {
+                                        width: 1.5,
+                                        color: cosmic.accent_color().into(),
+                                        radius: cosmic.radius_xs().into(),
+                                    },
+                                    ..Default::default()
+                                }
+                            })
+                            .into()
+                    } else {
+                        icon.into()
+                    };
+                    content = content.push(icon_element);
                 } else {
                     let placeholder = widget::text(app_id.chars().next().unwrap_or('?').to_string())
                         .size(12);
@@ -298,16 +319,13 @@ impl cosmic::Application for AppModel {
             Message::WorkspaceEvent(WorkspaceEvent::WorkspacesChanged(workspaces)) => {
                 self.workspaces = workspaces;
                 self.workspaces.sort_by(|a, b| a.name.cmp(&b.name));
-                println!("Workspaces updated: {} workspaces", self.workspaces.len());
 
                 // Collect all app_ids that need icons
                 let mut app_ids_to_load = Vec::new();
                 for ws in &self.workspaces {
-                    println!("  - {} (coords: {:?})", ws.name, ws.coordinates);
-                    for app in &ws.top_levels {
-                        println!("    -> {}", app);
-                        if let Some(app_id) = app.split(':').next() {
-                            let app_id = app_id.trim().to_string();
+                    for toplevel_id in &ws.top_levels {
+                        if let Some(toplevel_info) = self.toplevels.get(toplevel_id) {
+                            let app_id = toplevel_info.app_id.clone();
                             if !self.app_icons.contains_key(&app_id) {
                                 app_ids_to_load.push(app_id);
                             }
@@ -325,8 +343,6 @@ impl cosmic::Application for AppModel {
                 return Task::batch(tasks);
             }
             Message::WorkspaceEvent(WorkspaceEvent::ToplevelAdded(toplevel)) => {
-                println!("Toplevel added: {} - {} (workspaces: {:?})",
-                    toplevel.app_id, toplevel.title, toplevel.workspaces);
                 self.toplevels.insert(toplevel.id.clone(), toplevel.clone());
 
                 // Load icon if not already loaded
@@ -339,16 +355,12 @@ impl cosmic::Application for AppModel {
                 }
             }
             Message::WorkspaceEvent(WorkspaceEvent::ToplevelUpdated(toplevel)) => {
-                println!("Toplevel updated: {} - {} (workspaces: {:?})",
-                    toplevel.app_id, toplevel.title, toplevel.workspaces);
                 self.toplevels.insert(toplevel.id.clone(), toplevel);
             }
             Message::WorkspaceEvent(WorkspaceEvent::ToplevelRemoved(id)) => {
-                println!("Toplevel removed: {}", id);
                 self.toplevels.remove(&id);
             }
             Message::IconLoaded(app_id, path) => {
-                println!("Icon loaded for {}: {:?}", app_id, path);
                 self.app_icons.insert(app_id, path);
             }
             Message::TogglePopup => {
