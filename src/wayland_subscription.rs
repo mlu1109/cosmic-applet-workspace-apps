@@ -21,6 +21,7 @@ use futures_channel::mpsc;
 use futures_util::StreamExt;
 use std::{collections::HashMap, thread};
 use std::collections::HashSet;
+use cosmic::cctk::cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1::State;
 use cosmic::cctk::wayland_client::Proxy;
 use cosmic::cctk::wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1;
 use cosmic::cctk::wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::ExtWorkspaceHandleV1;
@@ -47,6 +48,7 @@ pub struct ToplevelAppInfo {
     pub app_id: String,
     pub title: String,
     pub workspaces: Vec<String>,
+    pub is_active: bool,
 }
 
 pub fn workspace_subscription() -> iced::Subscription<WorkspaceEvent> {
@@ -89,11 +91,12 @@ impl AppData {
         let workspaces = info.workspace.iter()
             .filter_map(|ws| self.get_workspace_name(ws))
             .collect();
-        
+        let is_active  = info.state.contains(&State::Activated);
         ToplevelAppInfo {
             id: format!("{:?}", handle.id()),
             app_id: info.app_id.clone(),
             title: info.title.clone(),
+            is_active,
             workspaces,
         }
     }
