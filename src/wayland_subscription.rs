@@ -92,13 +92,14 @@ impl AppData {
             .filter_map(|ws| self.get_workspace_name(ws))
             .collect();
         let is_active  = info.state.contains(&State::Activated);
-        ToplevelAppInfo {
+        let top_level = ToplevelAppInfo {
             id: format!("{:?}", handle.id()),
             app_id: info.app_id.clone(),
             title: info.title.clone(),
             is_active,
             workspaces,
-        }
+        };
+        top_level
     }
 }
 
@@ -138,9 +139,7 @@ impl WorkspaceHandler for AppData {
                     // Find all top_levels in this workspace
                     for (toplevel_handle, toplevel_workspaces) in &self.toplevel_workspaces {
                         if toplevel_workspaces.contains(workspace_handle) {
-                            if let Some(info) = self.toplevel_info_state.info(toplevel_handle) {
-                                toplevel_ids.push(format!("{}: {}", info.app_id, info.title));
-                            }
+                            toplevel_ids.push(toplevel_handle.id().to_string());
                         }
                     }
 
