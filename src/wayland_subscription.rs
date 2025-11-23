@@ -170,6 +170,7 @@ impl ToplevelInfoHandler for AppData {
             self.toplevel_workspaces.insert(toplevel.clone(), info.workspace.clone());
             let app_info = self.toplevel_to_app_info(toplevel, info);
             self.send_event(WorkspaceEvent::ToplevelAdded(app_info));
+            self.done();
         }
     }
 
@@ -183,6 +184,7 @@ impl ToplevelInfoHandler for AppData {
             self.toplevel_workspaces.insert(toplevel.clone(), info.workspace.clone());
             let app_info = self.toplevel_to_app_info(toplevel, info);
             self.send_event(WorkspaceEvent::ToplevelUpdated(app_info));
+            self.done();
         }
     }
 
@@ -195,6 +197,7 @@ impl ToplevelInfoHandler for AppData {
         self.toplevel_workspaces.remove(toplevel);
         let id = format!("{:?}", toplevel.id());
         self.send_event(WorkspaceEvent::ToplevelRemoved(id));
+        self.done();
     }
 }
 
