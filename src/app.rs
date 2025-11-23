@@ -4,7 +4,7 @@ use crate::config::Config;
 use crate::fl;
 use crate::wayland_subscription::{self, WorkspaceEvent, WorkspaceInfo, ToplevelAppInfo};
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
-use cosmic::iced::{window::Id, Length, Limits, Subscription};
+use cosmic::iced::{window::Id, Limits, Subscription};
 use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
 use cosmic::iced::event::{wayland::Event as WaylandEvent, PlatformSpecific};
 use cosmic::prelude::*;
@@ -15,8 +15,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use cosmic::Action::App;
-use cosmic::applet::Size;
-use cosmic::iced_core::Layout;
 use cosmic::iced_widget::button;
 
 static AUTOSIZE_MAIN_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("autosize-main"));
@@ -57,6 +55,42 @@ pub enum Message {
 }
 
 /// Create a COSMIC application from the app model
+impl AppModel {
+    fn workspace_button(&self, workspace: &WorkspaceInfo) -> Element<'_, Message> {
+        let workspace_num = if !workspace.coordinates.is_empty() {
+            workspace.coordinates[0] + 1
+        } else {
+            0
+        };
+
+        let mut content = widget::row().spacing(2);
+        
+        content = content.push(
+            widget::text(format!("{}", workspace_num))
+                .size(14)
+        );
+
+        for toplevel_desc in &workspace.top_levels {
+            if let Some(app_id) = toplevel_desc.split(':').next() {
+                let app_id = app_id.trim();
+
+                if let Some(icon_path) = self.app_icons.get(app_id) {
+                    let icon = widget::icon::from_path(icon_path.clone()).icon().size(16);
+                    content = content.push(icon);
+                } else {
+                    let placeholder = widget::text(app_id.chars().next().unwrap_or('?').to_string())
+                        .size(12);
+                    content = content.push(placeholder);
+                }
+            }
+        }
+
+        button(content)
+            .padding([2, 6])
+            .into()
+    }
+}
+
 impl cosmic::Application for AppModel {
     /// The async executor that will be used to run your application's commands.
     type Executor = cosmic::executor::Default;
@@ -116,37 +150,18 @@ impl cosmic::Application for AppModel {
     fn view(&self) -> Element<'_, Self::Message> {
         let mut row = widget::row().spacing(4);
 
-        for workspace in &self.workspaces {
-            let workspace_num = if !workspace.coordinates.is_empty() {
-                workspace.coordinates[0] + 1
-            } else {
-                0
-            };
+        if self.workspaces.is_empty() {
+            row = row.push(widget::text("...").size(14));
+        } else {
+            for workspace in &self.workspaces {
+                row = row.push(self.workspace_button(workspace));
 
-            let ws_button = button(
-                widget::text(format!("{}", workspace_num))
-                    .size(14)
-            )
-            .padding([2, 6]);
-            row = row.push(ws_button);
-
-            for toplevel_desc in &workspace.top_levels {
-                if let Some(app_id) = toplevel_desc.split(':').next() {
-                    let app_id = app_id.trim();
-
-                    if let Some(icon_path) = self.app_icons.get(app_id) {
-                        let icon = widget::icon::from_path(icon_path.clone()).icon().size(16);
-                        row = row.push(icon);
-                    } else {
-                        let placeholder = widget::text(app_id.chars().next().unwrap_or('?').to_string())
-                            .size(12);
-                        row = row.push(placeholder);
+                if let Some(workspace_num) = workspace.coordinates.first() {
+                    let workspace_num = workspace_num + 1;
+                    if workspace_num < self.workspaces.len() as u32 {
+                        row = row.push(widget::text("|").size(12));
                     }
                 }
-            }
-
-            if workspace_num < self.workspaces.len() as u32 {
-                row = row.push(widget::text("|").size(12));
             }
         }
         
@@ -191,7 +206,7 @@ impl cosmic::Application for AppModel {
     /// continue to execute for the duration that they remain in the batch.
     fn subscription(&self) -> Subscription<Self::Message> {
         struct MySubscription;
-        struct WaylandEventsSubscription;
+        //struct WaylandEventsSubscription;
 
         let mut subscriptions = vec![
             // Create a subscription which emits updates through a channel.
