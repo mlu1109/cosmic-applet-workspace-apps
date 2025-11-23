@@ -38,6 +38,7 @@ pub struct WorkspaceInfo {
     pub name: String,
     pub coordinates: Vec<u32>,
     pub top_levels: Vec<String>,
+    pub is_active: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -144,6 +145,7 @@ impl WorkspaceHandler for AppData {
                         name: workspace.name.clone(),
                         coordinates: workspace.coordinates.clone(),
                         top_levels: toplevel_ids,
+                        is_active: workspace.state.contains(cosmic::cctk::wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::State::Active),
                     });
                 }
             }

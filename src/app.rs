@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use cosmic::Action::App;
+use cosmic::cosmic_theme::palette::angle::IntoAngle;
 use cosmic::iced_widget::button;
 
 static AUTOSIZE_MAIN_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("autosize-main"));
@@ -59,10 +60,19 @@ impl AppModel {
     fn workspace_button(&self, workspace: &WorkspaceInfo) -> Element<'_, Message> {
         let mut content = widget::row().spacing(2);
         
-        content = content.push(
-            widget::text(format!("{}", workspace.name))
-                .size(14)
-        );
+        let text = widget::text(format!("{}", workspace.name))
+            .size(14);
+        
+        let text = if workspace.is_active {
+            text.font(cosmic::iced::Font {
+                weight: cosmic::iced::font::Weight::Bold,
+                ..Default::default()
+            })
+        } else {
+            text
+        };
+        
+        content = content.push(text);
 
         for toplevel_desc in &workspace.top_levels {
             if let Some(app_id) = toplevel_desc.split(':').next() {
@@ -79,9 +89,34 @@ impl AppModel {
             }
         }
 
-        button(content)
-            .padding([2, 6])
-            .into()
+        let is_active = workspace.is_active;
+        let container = widget::container(content)
+            .padding([4, 8])
+            .style(move |theme| {
+                let cosmic = theme.cosmic();
+                widget::container::Style {
+                    background: None,
+                    text_color: if is_active {
+                        Some(cosmic.on_bg_color().into())
+                    } else {
+                        Some(cosmic::iced::Color {
+                            a: 0.5,
+                            ..cosmic.on_bg_color().into()
+                        })
+                    },
+                    border: cosmic::iced_core::Border {
+                        width: if is_active { 2.0 } else { 0.0 },
+                        color: if is_active {
+                            cosmic.accent_color().into()
+                        } else {
+                            cosmic::iced::Color::TRANSPARENT
+                        },
+                        radius: cosmic.radius_s().into(),
+                    },
+                    ..Default::default()
+                }
+            });
+        container.into()
     }
 }
 
