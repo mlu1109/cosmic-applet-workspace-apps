@@ -57,16 +57,10 @@ pub enum Message {
 /// Create a COSMIC application from the app model
 impl AppModel {
     fn workspace_button(&self, workspace: &WorkspaceInfo) -> Element<'_, Message> {
-        let workspace_num = if !workspace.coordinates.is_empty() {
-            workspace.coordinates[0] + 1
-        } else {
-            0
-        };
-
         let mut content = widget::row().spacing(2);
         
         content = content.push(
-            widget::text(format!("{}", workspace_num))
+            widget::text(format!("{}", workspace.name))
                 .size(14)
         );
 
