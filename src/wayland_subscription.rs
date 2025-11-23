@@ -4,6 +4,7 @@ use cosmic::cctk::{
     self,
     sctk::{
         self,
+        output::{OutputHandler, OutputState},
         registry::{ProvidesRegistryState, RegistryState},
         seat::{SeatHandler, SeatState},
     },
@@ -11,7 +12,7 @@ use cosmic::cctk::{
     wayland_client::{
         Connection, QueueHandle,
         globals::registry_queue_init,
-        protocol::wl_seat,
+        protocol::{wl_seat, wl_output::{self, WlOutput}},
     },
     workspace::{WorkspaceHandler, WorkspaceState},
 };
@@ -64,11 +65,14 @@ pub struct AppData {
     #[allow(dead_code)]
     qh: QueueHandle<Self>,
     registry_state: RegistryState,
+    output_state: OutputState,
     workspace_state: WorkspaceState,
     toplevel_info_state: ToplevelInfoState,
     seat_state: SeatState,
     sender: mpsc::Sender<WorkspaceEvent>,
     toplevel_workspaces: HashMap<ExtForeignToplevelHandleV1, HashSet<ExtWorkspaceHandleV1>>,
+    configured_output: String,
+    expected_output: Option<WlOutput>,
 }
 
 impl AppData {
@@ -112,8 +116,17 @@ impl WorkspaceHandler for AppData {
             }
         }
 
-        // Get top_levels per workspace
+        // Get top_levels per workspace, filtered by current display
         for group in self.workspace_state.workspace_groups() {
+            // Filter by current output (display)
+            let is_current_output = self.expected_output.as_ref()
+                .map(|expected| group.outputs.iter().any(|o| o == expected))
+                .unwrap_or(true);
+            
+            if !is_current_output {
+                continue;
+            }
+
             for workspace_handle in &group.workspaces {
                 if let Some(workspace) = self.workspace_state.workspace_info(workspace_handle) {
                     let mut toplevel_ids = Vec::new();
@@ -188,7 +201,41 @@ impl ProvidesRegistryState for AppData {
         &mut self.registry_state
     }
 
-    sctk::registry_handlers!();
+    sctk::registry_handlers![OutputState,];
+}
+
+impl OutputHandler for AppData {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    fn new_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        let info = self.output_state.info(&output).unwrap();
+        if info.name.as_deref() == Some(&self.configured_output) {
+            self.expected_output = Some(output);
+        }
+    }
+
+    fn update_output(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _output: wl_output::WlOutput,
+    ) {
+    }
 }
 
 impl SeatHandler for AppData {
@@ -219,6 +266,7 @@ impl SeatHandler for AppData {
 
 cctk::delegate_workspace!(AppData);
 cctk::delegate_toplevel_info!(AppData);
+sctk::delegate_output!(AppData);
 sctk::delegate_seat!(AppData);
 sctk::delegate_registry!(AppData);
 
@@ -229,7 +277,12 @@ async fn start(conn: Connection) -> mpsc::Receiver<WorkspaceEvent> {
         let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
         let qh = event_queue.handle();
 
+        let configured_output = std::env::var("COSMIC_PANEL_OUTPUT")
+            .ok()
+            .unwrap_or_default();
+
         let registry_state = RegistryState::new(&globals);
+        let output_state = OutputState::new(&globals, &qh);
         let workspace_state = WorkspaceState::new(&registry_state, &qh);
         let toplevel_info_state = ToplevelInfoState::new(&registry_state, &qh);
         let seat_state = SeatState::new(&globals, &qh);
@@ -237,11 +290,14 @@ async fn start(conn: Connection) -> mpsc::Receiver<WorkspaceEvent> {
         let mut app_data = AppData {
             qh: qh.clone(),
             registry_state,
+            output_state,
             workspace_state,
             toplevel_info_state,
             seat_state,
             sender,
             toplevel_workspaces: HashMap::new(),
+            configured_output,
+            expected_output: None,
         };
 
         loop {
