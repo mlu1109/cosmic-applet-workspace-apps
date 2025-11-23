@@ -257,6 +257,7 @@ impl cosmic::Application for AppModel {
             }
             Message::WorkspaceEvent(WorkspaceEvent::WorkspacesChanged(workspaces)) => {
                 self.workspaces = workspaces;
+                self.workspaces.sort_by(|a, b| a.name.cmp(&b.name));
                 println!("Workspaces updated: {} workspaces", self.workspaces.len());
 
                 // Collect all app_ids that need icons
