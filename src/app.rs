@@ -1,22 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::config::Config;
-use crate::fl;
 use crate::wayland_subscription::{self, WorkspaceEvent, WorkspaceInfo, ToplevelAppInfo};
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
-use cosmic::iced::{window::Id, Limits, Subscription};
-use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
-use cosmic::iced::event::{wayland::Event as WaylandEvent};
+use cosmic::iced::{Limits, Subscription};
 use cosmic::prelude::*;
 use cosmic::widget;
-use cosmic::cctk::wayland_client::{Connection, Proxy};
-use futures_util::SinkExt;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use cosmic::Action::App;
-use cosmic::cosmic_theme::palette::angle::IntoAngle;
-use cosmic::iced_widget::button;
 
 static AUTOSIZE_MAIN_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("autosize-main"));
 
@@ -26,18 +19,12 @@ static AUTOSIZE_MAIN_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new
 pub struct AppModel {
     /// Application state which is managed by the COSMIC runtime.
     core: cosmic::Core,
-    /// The popup id.
-    popup: Option<Id>,
     /// Configuration data that persists between application runs.
     config: Config,
-    /// Example row toggler.
-    example_row: bool,
-    /// Wayland connection for workspace subscription
-    wayland_conn: Option<Connection>,
     /// Current workspaces
     workspaces: Vec<WorkspaceInfo>,
-    /// Current toplevels/applications
-    toplevels: HashMap<String, ToplevelAppInfo>,
+    /// Current applications
+    top_levels: HashMap<String, ToplevelAppInfo>,
     /// App icon cache
     app_icons: HashMap<String, PathBuf>,
 }
@@ -45,12 +32,7 @@ pub struct AppModel {
 /// Messages emitted by the application and its widgets.
 #[derive(Debug, Clone)]
 pub enum Message {
-    TogglePopup,
-    PopupClosed(Id),
-    SubscriptionChannel,
     UpdateConfig(Config),
-    ToggleExampleRow(bool),
-    WaylandEvent(WaylandEvent),
     WorkspaceEvent(WorkspaceEvent),
     IconLoaded(String, PathBuf),
 }
@@ -84,10 +66,9 @@ impl AppModel {
         content = content.push(text);
 
         for toplevel_id in &workspace.top_levels {
-            if let Some(toplevel_info) = self.toplevels.get(toplevel_id) {
+            if let Some(toplevel_info) = self.top_levels.get(toplevel_id) {
                 let app_id = &toplevel_info.app_id;
                 let is_active = toplevel_info.is_active;
-
                 if let Some(icon_path) = self.app_icons.get(app_id) {
                     let icon = widget::icon::from_path(icon_path.clone())
                         .icon()
@@ -104,6 +85,7 @@ impl AppModel {
                                         width: 1.5,
                                         color: cosmic.accent_color().into(),
                                         radius: cosmic.radius_xs().into(),
+
                                     },
                                     ..Default::default()
                                 }
@@ -199,10 +181,6 @@ impl cosmic::Application for AppModel {
         (app, Task::none())
     }
 
-    fn on_close_requested(&self, id: Id) -> Option<Message> {
-        Some(Message::PopupClosed(id))
-    }
-
     /// Describes the interface based on the current state of the application model.
     ///
     /// The applet's button in the panel will be drawn using the main view method.
@@ -216,13 +194,6 @@ impl cosmic::Application for AppModel {
         } else {
             for workspace in &self.workspaces {
                 row = row.push(self.workspace_button(workspace));
-
-                if let Some(workspace_num) = workspace.coordinates.first() {
-                    let workspace_num = workspace_num + 1;
-                    if workspace_num < self.workspaces.len() as u32 {
-                        row = row.push(widget::text("|").size(12));
-                    }
-                }
             }
         }
         
@@ -244,21 +215,6 @@ impl cosmic::Application for AppModel {
         .into()
     }
 
-    /// The applet's popup window will be drawn using this view method. If there are
-    /// multiple poups, you may match the id parameter to determine which popup to
-    /// create a view for.
-    fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
-        let content_list = widget::list_column()
-            .padding(5)
-            .spacing(0)
-            .add(widget::settings::item(
-                fl!("example-row"),
-                widget::toggler(self.example_row).on_toggle(Message::ToggleExampleRow),
-            ));
-
-        self.core.applet.popup_container(content_list).into()
-    }
-
     /// Register subscriptions for this application.
     ///
     /// Subscriptions are long-lived async tasks running in the background which
@@ -266,18 +222,8 @@ impl cosmic::Application for AppModel {
     /// activated by selectively appending to the subscription batch, and will
     /// continue to execute for the duration that they remain in the batch.
     fn subscription(&self) -> Subscription<Self::Message> {
-        struct MySubscription;
 
         let subscriptions = vec![
-            // Create a subscription which emits updates through a channel.
-            Subscription::run_with_id(
-                std::any::TypeId::of::<MySubscription>(),
-                cosmic::iced::stream::channel(4, move |mut channel| async move {
-                    _ = channel.send(Message::SubscriptionChannel).await;
-
-                    futures_util::future::pending().await
-                }),
-            ),
             // Watch for application configuration changes.
             self.core()
                 .watch_config::<Config>(Self::APP_ID)
@@ -299,22 +245,8 @@ impl cosmic::Application for AppModel {
     /// tasks are finished.
     fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
         match message {
-            Message::SubscriptionChannel => {
-                // For example purposes only.
-            }
             Message::UpdateConfig(config) => {
                 self.config = config;
-            }
-            Message::ToggleExampleRow(toggled) => self.example_row = toggled,
-            Message::WaylandEvent(evt) => {
-                // Extract Wayland connection from the event
-                if self.wayland_conn.is_none() {
-                    if let WaylandEvent::Output(_evt, output) = evt {
-                        if let Some(backend) = output.backend().upgrade() {
-                            self.wayland_conn = Some(Connection::from_backend(backend));
-                        }
-                    }
-                }
             }
             Message::WorkspaceEvent(WorkspaceEvent::WorkspacesChanged(workspaces)) => {
                 self.workspaces = workspaces;
@@ -324,7 +256,7 @@ impl cosmic::Application for AppModel {
                 let mut app_ids_to_load = Vec::new();
                 for ws in &self.workspaces {
                     for toplevel_id in &ws.top_levels {
-                        if let Some(toplevel_info) = self.toplevels.get(toplevel_id) {
+                        if let Some(toplevel_info) = self.top_levels.get(toplevel_id) {
                             let app_id = toplevel_info.app_id.clone();
                             if !self.app_icons.contains_key(&app_id) {
                                 app_ids_to_load.push(app_id);
@@ -343,7 +275,7 @@ impl cosmic::Application for AppModel {
                 return Task::batch(tasks);
             }
             Message::WorkspaceEvent(WorkspaceEvent::ToplevelAdded(toplevel)) => {
-                self.toplevels.insert(toplevel.id.clone(), toplevel.clone());
+                self.top_levels.insert(toplevel.id.clone(), toplevel.clone());
 
                 // Load icon if not already loaded
                 if !self.app_icons.contains_key(&toplevel.app_id) {
@@ -355,39 +287,13 @@ impl cosmic::Application for AppModel {
                 }
             }
             Message::WorkspaceEvent(WorkspaceEvent::ToplevelUpdated(toplevel)) => {
-                self.toplevels.insert(toplevel.id.clone(), toplevel);
+                self.top_levels.insert(toplevel.id.clone(), toplevel);
             }
             Message::WorkspaceEvent(WorkspaceEvent::ToplevelRemoved(id)) => {
-                self.toplevels.remove(&id);
+                self.top_levels.remove(&id);
             }
             Message::IconLoaded(app_id, path) => {
                 self.app_icons.insert(app_id, path);
-            }
-            Message::TogglePopup => {
-                return if let Some(p) = self.popup.take() {
-                    destroy_popup(p)
-                } else {
-                    let new_id = Id::unique();
-                    self.popup.replace(new_id);
-                    let mut popup_settings = self.core.applet.get_popup_settings(
-                        self.core.main_window_id().unwrap(),
-                        new_id,
-                        None,
-                        None,
-                        None,
-                    );
-                    popup_settings.positioner.size_limits = Limits::NONE
-                        .max_width(372.0)
-                        .min_width(300.0)
-                        .min_height(200.0)
-                        .max_height(1080.0);
-                    get_popup(popup_settings)
-                }
-            }
-            Message::PopupClosed(id) => {
-                if self.popup.as_ref() == Some(&id) {
-                    self.popup = None;
-                }
             }
         }
         Task::none()
