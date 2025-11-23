@@ -58,7 +58,16 @@ pub enum Message {
 /// Create a COSMIC application from the app model
 impl AppModel {
     fn workspace_button(&self, workspace: &WorkspaceInfo) -> Element<'_, Message> {
-        let mut content = widget::row().spacing(2);
+        // Calculate icon size based on panel height (use ~60% of panel height, capped)
+        let icon_size = if let Some(b) = self.core.applet.suggested_bounds {
+            (b.height as f32 * 0.6).min(24.0).max(12.0) as u16
+        } else {
+            16
+        };
+        
+        let mut content = widget::row()
+            .spacing(2)
+            .align_y(cosmic::iced::Alignment::Center);
         
         let text = widget::text(format!("{}", workspace.name))
             .size(14);
@@ -79,7 +88,9 @@ impl AppModel {
                 let app_id = app_id.trim();
 
                 if let Some(icon_path) = self.app_icons.get(app_id) {
-                    let icon = widget::icon::from_path(icon_path.clone()).icon().size(16);
+                    let icon = widget::icon::from_path(icon_path.clone())
+                        .icon()
+                        .size(icon_size);
                     content = content.push(icon);
                 } else {
                     let placeholder = widget::text(app_id.chars().next().unwrap_or('?').to_string())
@@ -377,18 +388,101 @@ impl cosmic::Application for AppModel {
 
 async fn load_app_icon(app_id: String) -> PathBuf {
     tokio::task::spawn_blocking(move || {
-        freedesktop_icons::lookup(&app_id)
+        // Try direct lookup first
+        if let Some(path) = freedesktop_icons::lookup(&app_id)
+            .with_size(16)
+            .with_cache()
+            .find() {
+            return path;
+        }
+        
+        // Try case-insensitive lookup
+        let app_id_lower = app_id.to_lowercase();
+        if let Some(path) = freedesktop_icons::lookup(&app_id_lower)
+            .with_size(16)
+            .with_cache()
+            .find() {
+            return path;
+        }
+        
+        // Search desktop files for matching StartupWMClass
+        if let Some(icon_name) = find_icon_from_desktop_file(&app_id) {
+            // Try the icon name from desktop file
+            if let Some(path) = freedesktop_icons::lookup(&icon_name)
+                .with_size(16)
+                .with_cache()
+                .find() {
+                return path;
+            }
+            
+            // If icon is an absolute path, use it directly
+            if std::path::Path::new(&icon_name).is_absolute() && std::path::Path::new(&icon_name).exists() {
+                return PathBuf::from(icon_name);
+            }
+        }
+        
+        // Fallback to default
+        freedesktop_icons::lookup("application-default")
             .with_size(16)
             .with_cache()
             .find()
-            .unwrap_or_else(|| {
-                freedesktop_icons::lookup("application-default")
-                    .with_size(16)
-                    .with_cache()
-                    .find()
-                    .unwrap_or_default()
-            })
+            .unwrap_or_default()
     })
     .await
     .unwrap_or_default()
+}
+
+fn find_icon_from_desktop_file(app_id: &str) -> Option<String> {
+    use std::fs;
+    use std::io::{BufRead, BufReader};
+    
+    let mut desktop_dirs = Vec::new();
+    
+    // Use XDG_DATA_HOME or default to ~/.local/share
+    if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
+        desktop_dirs.push(format!("{}/applications", data_home));
+    } else if let Ok(home) = std::env::var("HOME") {
+        desktop_dirs.push(format!("{}/.local/share/applications", home));
+    }
+    
+    // Use XDG_DATA_DIRS or default to /usr/local/share:/usr/share
+    if let Ok(data_dirs) = std::env::var("XDG_DATA_DIRS") {
+        for dir in data_dirs.split(':') {
+            if !dir.is_empty() {
+                desktop_dirs.push(format!("{}/applications", dir));
+            }
+        }
+    } else {
+        desktop_dirs.push("/usr/local/share/applications".to_string());
+        desktop_dirs.push("/usr/share/applications".to_string());
+    }
+    
+    for dir in &desktop_dirs {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if let Ok(file) = fs::File::open(entry.path()) {
+                    let reader = BufReader::new(file);
+                    let mut icon_name = None;
+                    let mut matches = false;
+                    
+                    for line in reader.lines().flatten() {
+                        if line.starts_with("Icon=") {
+                            icon_name = Some(line[5..].to_string());
+                        } else if line.starts_with("StartupWMClass=") {
+                            let wm_class = &line[15..];
+                            if wm_class.eq_ignore_ascii_case(app_id) {
+                                matches = true;
+                            }
+                        }
+                    }
+                    
+                    if matches && icon_name.is_some() {
+                        return icon_name;
+                    }
+                }
+            }
+        }
+    }
+    
+    None
 }
