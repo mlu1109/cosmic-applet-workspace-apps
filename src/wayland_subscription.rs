@@ -47,12 +47,16 @@ pub struct ToplevelAppInfo {
     pub workspaces: Vec<String>,
 }
 
-pub fn workspace_subscription(conn: Connection) -> iced::Subscription<WorkspaceEvent> {
+pub fn workspace_subscription() -> iced::Subscription<WorkspaceEvent> {
     iced::Subscription::run_with_id(
         "workspace-sub",
-        futures_util::stream::once(async { start(conn) })
-            .then(|receiver| receiver)
-            .flatten(),
+        futures_util::stream::once(async {
+            match Connection::connect_to_env() {
+                Ok(conn) => start(conn).await,
+                Err(_) => mpsc::channel(1).1,
+            }
+        })
+        .flatten(),
     )
 }
 

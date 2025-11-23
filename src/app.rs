@@ -6,7 +6,7 @@ use crate::wayland_subscription::{self, WorkspaceEvent, WorkspaceInfo, ToplevelA
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::{window::Id, Limits, Subscription};
 use cosmic::iced_winit::commands::popup::{destroy_popup, get_popup};
-use cosmic::iced::event::{wayland::Event as WaylandEvent, PlatformSpecific};
+use cosmic::iced::event::{wayland::Event as WaylandEvent};
 use cosmic::prelude::*;
 use cosmic::widget;
 use cosmic::cctk::wayland_client::{Connection, Proxy};
@@ -114,7 +114,7 @@ impl cosmic::Application for AppModel {
 
     /// Initializes the application with any given flags and startup commands.
     fn init(
-        mut core: cosmic::Core,
+        core: cosmic::Core,
         _flags: Self::Flags,
     ) -> (Self, Task<cosmic::Action<Self::Message>>) {
         // Construct the app model with the runtime's core.
@@ -206,9 +206,8 @@ impl cosmic::Application for AppModel {
     /// continue to execute for the duration that they remain in the batch.
     fn subscription(&self) -> Subscription<Self::Message> {
         struct MySubscription;
-        //struct WaylandEventsSubscription;
 
-        let mut subscriptions = vec![
+        let subscriptions = vec![
             // Create a subscription which emits updates through a channel.
             Subscription::run_with_id(
                 std::any::TypeId::of::<MySubscription>(),
@@ -222,28 +221,12 @@ impl cosmic::Application for AppModel {
             self.core()
                 .watch_config::<Config>(Self::APP_ID)
                 .map(|update| {
-                    // for why in update.errors {
-                    //     tracing::error!(?why, "app config error");
-                    // }
-
                     Message::UpdateConfig(update.config)
                 }),
-            // Listen for Wayland events to get the connection
-            cosmic::iced::event::listen_with(|evt, _, _| match evt {
-                cosmic::iced::Event::PlatformSpecific(PlatformSpecific::Wayland(evt)) => {
-                    Some(Message::WaylandEvent(evt))
-                }
-                _ => None,
-            }),
+            // Workspace subscription
+            wayland_subscription::workspace_subscription()
+                .map(Message::WorkspaceEvent),
         ];
-
-        // Add workspace subscription if we have a connection
-        if let Some(conn) = &self.wayland_conn {
-            subscriptions.push(
-                wayland_subscription::workspace_subscription(conn.clone())
-                    .map(Message::WorkspaceEvent)
-            );
-        }
 
         Subscription::batch(subscriptions)
     }
