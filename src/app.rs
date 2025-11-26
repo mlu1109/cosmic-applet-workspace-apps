@@ -67,42 +67,12 @@ impl AppModel {
 
         for toplevel_id in &workspace.top_levels {
             if let Some(toplevel_info) = self.top_levels.get(toplevel_id) {
-                let app_id = &toplevel_info.app_id;
-                let is_active = toplevel_info.is_active;
-                if let Some(icon_path) = self.app_icons.get(app_id) {
-                    if icon_path.is_none() {
-                        continue;
-                    }
-                    let icon = widget::icon::from_path(icon_path.clone().unwrap())
-                        .icon()
-                        .size(icon_size);
-                    
-                    let icon_element: Element<'_, Message> = if is_active {
-                        widget::container(icon)
-                            .style(move |theme| {
-                                let cosmic = theme.cosmic();
-                                widget::container::Style {
-                                    background: None,
-                                    text_color: None,
-                                    border: cosmic::iced_core::Border {
-                                        width: 1.5,
-                                        color: cosmic.accent_color().into(),
-                                        radius: cosmic.radius_xs().into(),
-
-                                    },
-                                    ..Default::default()
-                                }
-                            })
-                            .into()
-                    } else {
-                        icon.into()
-                    };
-                    content = content.push(icon_element);
-                } else {
-                    let placeholder = widget::text(app_id.chars().next().unwrap_or('?').to_string())
-                        .size(12);
-                    content = content.push(placeholder);
-                }
+                let element = self.application_icon(
+                    &toplevel_info.app_id,
+                    toplevel_info.is_active,
+                    icon_size,
+                );
+                content = content.push(element);
             }
         }
 
@@ -134,6 +104,42 @@ impl AppModel {
                 }
             });
         container.into()
+    }
+
+    fn application_icon(&self, app_id: &str, is_active: bool, icon_size: u16) -> Element<'_, Message> {
+        let icon_path = self.app_icons.get(app_id).and_then(|p| p.as_ref());
+        
+        let element = if let Some(path) = icon_path {
+            widget::icon::from_path(path.clone())
+                .icon()
+                .size(icon_size)
+                .into()
+        } else {
+            const FALLBACK_ICON: &[u8] = include_bytes!("../resources/fallback-icon.svg");
+            widget::icon::from_svg_bytes(FALLBACK_ICON).icon()
+                .size(icon_size)
+                .into()
+        };
+
+        if is_active {
+            widget::container(element)
+                .style(move |theme: &Theme| {
+                    let cosmic = theme.cosmic();
+                    widget::container::Style {
+                        background: None,
+                        text_color: None,
+                        border: cosmic::iced_core::Border {
+                            width: 1.5,
+                            color: cosmic.accent_color().into(),
+                            radius: cosmic.radius_xs().into(),
+                        },
+                        ..Default::default()
+                    }
+                })
+                .into()
+        } else {
+            element
+        }
     }
 }
 
@@ -182,40 +188,6 @@ impl cosmic::Application for AppModel {
         };
 
         (app, Task::none())
-    }
-
-    /// Describes the interface based on the current state of the application model.
-    ///
-    /// The applet's button in the panel will be drawn using the main view method.
-    /// This view should emit messages to toggle the applet's popup window, which will
-    /// be drawn using the `view_window` method.
-    fn view(&self) -> Element<'_, Self::Message> {
-        let mut row = widget::row().spacing(4);
-
-        if self.workspaces.is_empty() {
-            row = row.push(widget::text("...").size(14));
-        } else {
-            for workspace in &self.workspaces {
-                row = row.push(self.workspace_button(workspace));
-            }
-        }
-        
-        let mut limits = Limits::NONE.min_width(1.).min_height(1.);
-        if let Some(b) = self.core.applet.suggested_bounds {
-            if b.width as i32 > 0 {
-                limits = limits.max_width(b.width);
-            }
-            if b.height as i32 > 0 {
-                limits = limits.max_height(b.height);
-            }
-        }
-
-        widget::autosize::autosize(
-            widget::container(row).padding(0),
-            AUTOSIZE_MAIN_ID.clone(),
-        )
-        .limits(limits)
-        .into()
     }
 
     /// Register subscriptions for this application.
@@ -302,6 +274,40 @@ impl cosmic::Application for AppModel {
         Task::none()
     }
 
+    /// Describes the interface based on the current state of the application model.
+    ///
+    /// The applet's button in the panel will be drawn using the main view method.
+    /// This view should emit messages to toggle the applet's popup window, which will
+    /// be drawn using the `view_window` method.
+    fn view(&self) -> Element<'_, Self::Message> {
+        let mut row = widget::row().spacing(4);
+
+        if self.workspaces.is_empty() {
+            row = row.push(widget::text("...").size(14));
+        } else {
+            for workspace in &self.workspaces {
+                row = row.push(self.workspace_button(workspace));
+            }
+        }
+
+        let mut limits = Limits::NONE.min_width(1.).min_height(1.);
+        if let Some(b) = self.core.applet.suggested_bounds {
+            if b.width as i32 > 0 {
+                limits = limits.max_width(b.width);
+            }
+            if b.height as i32 > 0 {
+                limits = limits.max_height(b.height);
+            }
+        }
+
+        widget::autosize::autosize(
+            widget::container(row).padding(0),
+            AUTOSIZE_MAIN_ID.clone(),
+        )
+        .limits(limits)
+        .into()
+    }
+
     fn style(&self) -> Option<cosmic::iced_runtime::Appearance> {
         Some(cosmic::applet::style())
     }
@@ -342,11 +348,8 @@ async fn load_app_icon(app_id: String) -> Option<PathBuf> {
             }
         }
         
-        // Fallback to default
-        freedesktop_icons::lookup("application-default")
-            .with_size(16)
-            .with_cache()
-            .find()
+        // No icon found
+        None
     })
     .await
     .unwrap_or_default()
@@ -356,12 +359,26 @@ fn find_icon_from_desktop_file(app_id: &str) -> Option<String> {
     use std::fs;
     use std::io::{BufRead, BufReader};
 
-    let icon_name = ["XDG_DATA_DIRS", "XDG_DATA_HOME", "HOME"]
+    // Get data directories with proper defaults
+    let xdg_data_home = std::env::var("XDG_DATA_HOME").ok().or_else(|| {
+        std::env::var("HOME").ok().map(|home| format!("{}/.local/share", home))
+    });
+    let xdg_data_dirs = std::env::var("XDG_DATA_DIRS").ok()
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string());
+    
+    // Build search paths
+    let mut search_paths = Vec::new();
+    if let Some(data_home) = xdg_data_home {
+        search_paths.push(data_home);
+    }
+    for dir in xdg_data_dirs.split(':') {
+        search_paths.push(dir.to_string());
+    }
+
+    let icon_name = search_paths
         .iter()
-        .find_map(|variable| {
-            std::env::var(variable).ok().and_then(|value| {
-                value.split(':').find_map(|dir| {
-                    let app_dir = format!("{}/applications", dir);
+        .find_map(|dir| {
+            let app_dir = format!("{}/applications", dir);
                     if let Ok(entries) = fs::read_dir(app_dir) {
                         for entry in entries.flatten() {
                             if let Ok(file) = fs::File::open(entry.path()) {
@@ -386,9 +403,7 @@ fn find_icon_from_desktop_file(app_id: &str) -> Option<String> {
                             }
                         }
                     }
-                    None
-                })
-            })
+            None
         });
 
 
