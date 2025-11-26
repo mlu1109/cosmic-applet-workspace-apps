@@ -2,6 +2,7 @@
 
 use crate::config::Config;
 use crate::wayland_subscription::{self, WorkspaceEvent, WorkspaceInfo, ToplevelAppInfo};
+use cosmic::applet::Size;
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::{Limits, Subscription};
 use cosmic::prelude::*;
@@ -40,19 +41,33 @@ pub enum Message {
 /// Create a COSMIC application from the app model
 impl AppModel {
     fn workspace_button(&self, workspace: &WorkspaceInfo) -> Element<'_, Message> {
-        // Calculate icon size based on panel height (use ~60% of panel height, capped)
-        let icon_size = if let Some(b) = self.core.applet.suggested_bounds {
-            (b.height * 0.6).min(24.0).max(12.0) as u16
+        // Use the applet context to get proper sizing based on panel configuration
+        let icon_size = self.core.applet.suggested_size(true).0;
+        let text_size = match &self.core.applet.size {
+            Size::PanelSize(panel_size) => {
+                let size = panel_size.get_applet_icon_size_with_padding(false);
+                // Scale text with panel size
+                (size as f32 * 0.4).max(10.0) as u16
+            }
+            Size::Hardcoded((w, h)) => {
+                14
+            }
+        };
+        
+        let spacing = self.core.applet.spacing as f32 * 0.5;
+        let (padding_major, padding_minor) = self.core.applet.suggested_padding(true);
+        let padding = if self.core.applet.is_horizontal() {
+            [padding_minor as f32, padding_major as f32]
         } else {
-            16
+            [padding_major as f32, padding_minor as f32]
         };
         
         let mut content = widget::row()
-            .spacing(2)
+            .spacing(spacing)
             .align_y(cosmic::iced::Alignment::Center);
         
         let text = widget::text(format!("{}", workspace.name))
-            .size(14);
+            .size(text_size);
         
         let text = if workspace.is_active {
             text.font(cosmic::iced::Font {
@@ -78,7 +93,7 @@ impl AppModel {
 
         let is_active = workspace.is_active;
         let container = widget::container(content)
-            .padding([4, 8])
+            .padding(padding)
             .style(move |theme| {
                 let cosmic = theme.cosmic();
                 widget::container::Style {
@@ -280,10 +295,20 @@ impl cosmic::Application for AppModel {
     /// This view should emit messages to toggle the applet's popup window, which will
     /// be drawn using the `view_window` method.
     fn view(&self) -> Element<'_, Self::Message> {
-        let mut row = widget::row().spacing(4);
+        // Use applet spacing configuration
+        let row_spacing = self.core.applet.spacing as f32;
+        let text_size = match &self.core.applet.size {
+            Size::PanelSize(panel_size) => {
+                let size = panel_size.get_applet_icon_size_with_padding(false);
+                (size as f32 * 0.4).max(10.0) as u16
+            }
+            Size::Hardcoded(_) => 14,
+        };
+        
+        let mut row = widget::row().spacing(row_spacing);
 
         if self.workspaces.is_empty() {
-            row = row.push(widget::text("...").size(14));
+            row = row.push(widget::text("...").size(text_size));
         } else {
             for workspace in &self.workspaces {
                 row = row.push(self.workspace_button(workspace));
