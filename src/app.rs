@@ -54,7 +54,8 @@ impl AppModel {
             }
         };
         
-        let spacing = self.core.applet.spacing as f32 * 0.5;
+        let spacing = self.core.applet.spacing as f32;
+        let icon_spacing = self.core.applet.spacing as f32 * 0.5;
         let (padding_major, padding_minor) = self.core.applet.suggested_padding(true);
         let padding = if self.core.applet.is_horizontal() {
             [padding_minor as f32, padding_major as f32]
@@ -63,7 +64,7 @@ impl AppModel {
         };
         
         let mut content = widget::row()
-            .spacing(spacing)
+            .spacing(icon_spacing)
             .align_y(cosmic::iced::Alignment::Center);
         
         let text = widget::text(format!("{}", workspace.name))
@@ -79,6 +80,10 @@ impl AppModel {
         };
         
         content = content.push(text);
+
+        if !workspace.top_levels.is_empty() {
+            content = content.push(widget::horizontal_space().width(spacing));
+        }
 
         for toplevel_id in &workspace.top_levels {
             if let Some(toplevel_info) = self.top_levels.get(toplevel_id) {
