@@ -4,6 +4,15 @@ An applet for the COSMIC desktop that displays workspace numbers and icons for o
 
 >⚠️ **Warning:** This applet is in an early development stage and heavily vibe coded. Use at your own risk!
 
+## Screenshots
+
+### Small
+![Small panel size](./resources/panel_small.png)
+### Medium
+![Medium panel size](./resources/panel_medium.png)
+### Large
+![Large panel size](./resources/panel_large.png)
+
 ## Features
 - Shows numbers for open workspaces
 - Shows icons for open applications in each workspace
