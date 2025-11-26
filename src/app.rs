@@ -26,7 +26,7 @@ pub struct AppModel {
     /// Current applications
     top_levels: HashMap<String, ToplevelAppInfo>,
     /// App icon cache
-    app_icons: HashMap<String, PathBuf>,
+    app_icons: HashMap<String, Option<PathBuf>>,
 }
 
 /// Messages emitted by the application and its widgets.
@@ -34,7 +34,7 @@ pub struct AppModel {
 pub enum Message {
     UpdateConfig(Config),
     WorkspaceEvent(WorkspaceEvent),
-    IconLoaded(String, PathBuf),
+    IconLoaded(String, Option<PathBuf>),
 }
 
 /// Create a COSMIC application from the app model
@@ -70,7 +70,10 @@ impl AppModel {
                 let app_id = &toplevel_info.app_id;
                 let is_active = toplevel_info.is_active;
                 if let Some(icon_path) = self.app_icons.get(app_id) {
-                    let icon = widget::icon::from_path(icon_path.clone())
+                    if icon_path.is_none() {
+                        continue;
+                    }
+                    let icon = widget::icon::from_path(icon_path.clone().unwrap())
                         .icon()
                         .size(icon_size);
                     
@@ -304,14 +307,14 @@ impl cosmic::Application for AppModel {
     }
 }
 
-async fn load_app_icon(app_id: String) -> PathBuf {
+async fn load_app_icon(app_id: String) -> Option<PathBuf> {
     tokio::task::spawn_blocking(move || {
         // Try direct lookup first
         if let Some(path) = freedesktop_icons::lookup(&app_id)
             .with_size(16)
             .with_cache()
             .find() {
-            return path;
+            return Some(path);
         }
         
         // Try case-insensitive lookup
@@ -320,7 +323,7 @@ async fn load_app_icon(app_id: String) -> PathBuf {
             .with_size(16)
             .with_cache()
             .find() {
-            return path;
+            return Some(path);
         }
         
         // Search desktop files for matching StartupWMClass
@@ -330,12 +333,12 @@ async fn load_app_icon(app_id: String) -> PathBuf {
                 .with_size(16)
                 .with_cache()
                 .find() {
-                return path;
+                return Some(path);
             }
             
             // If icon is an absolute path, use it directly
             if std::path::Path::new(&icon_name).is_absolute() && std::path::Path::new(&icon_name).exists() {
-                return PathBuf::from(icon_name);
+                return Some(PathBuf::from(icon_name));
             }
         }
         
@@ -344,7 +347,6 @@ async fn load_app_icon(app_id: String) -> PathBuf {
             .with_size(16)
             .with_cache()
             .find()
-            .unwrap_or_default()
     })
     .await
     .unwrap_or_default()
@@ -353,54 +355,42 @@ async fn load_app_icon(app_id: String) -> PathBuf {
 fn find_icon_from_desktop_file(app_id: &str) -> Option<String> {
     use std::fs;
     use std::io::{BufRead, BufReader};
-    
-    let mut desktop_dirs = Vec::new();
-    
-    // Use XDG_DATA_HOME or default to ~/.local/share
-    if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
-        desktop_dirs.push(format!("{}/applications", data_home));
-    } else if let Ok(home) = std::env::var("HOME") {
-        desktop_dirs.push(format!("{}/.local/share/applications", home));
-    }
-    
-    // Use XDG_DATA_DIRS or default to /usr/local/share:/usr/share
-    if let Ok(data_dirs) = std::env::var("XDG_DATA_DIRS") {
-        for dir in data_dirs.split(':') {
-            if !dir.is_empty() {
-                desktop_dirs.push(format!("{}/applications", dir));
-            }
-        }
-    } else {
-        desktop_dirs.push("/usr/local/share/applications".to_string());
-        desktop_dirs.push("/usr/share/applications".to_string());
-    }
-    
-    for dir in &desktop_dirs {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                if let Ok(file) = fs::File::open(entry.path()) {
-                    let reader = BufReader::new(file);
-                    let mut icon_name = None;
-                    let mut matches = false;
-                    
-                    for line in reader.lines().flatten() {
-                        if line.starts_with("Icon=") {
-                            icon_name = Some(line[5..].to_string());
-                        } else if line.starts_with("StartupWMClass=") {
-                            let wm_class = &line[15..];
-                            if wm_class.eq_ignore_ascii_case(app_id) {
-                                matches = true;
+
+    let icon_name = ["XDG_DATA_DIRS", "XDG_DATA_HOME", "HOME"]
+        .iter()
+        .find_map(|variable| {
+            std::env::var(variable).ok().and_then(|value| {
+                value.split(':').find_map(|dir| {
+                    let app_dir = format!("{}/applications", dir);
+                    if let Ok(entries) = fs::read_dir(app_dir) {
+                        for entry in entries.flatten() {
+                            if let Ok(file) = fs::File::open(entry.path()) {
+                                let reader = BufReader::new(file);
+                                let mut icon_name = None;
+                                let mut matches = false;
+
+                                for line in reader.lines().flatten() {
+                                    if line.starts_with("Icon=") {
+                                        icon_name = Some(line[5..].to_string());
+                                    } else if line.starts_with("StartupWMClass=") {
+                                        let wm_class = &line[15..];
+                                        if wm_class.eq_ignore_ascii_case(app_id) {
+                                            matches = true;
+                                        }
+                                    }
+                                }
+
+                                if matches && icon_name.is_some() {
+                                    return icon_name;
+                                }
                             }
                         }
                     }
-                    
-                    if matches && icon_name.is_some() {
-                        return icon_name;
-                    }
-                }
-            }
-        }
-    }
-    
-    None
+                    None
+                })
+            })
+        });
+
+
+    icon_name
 }
