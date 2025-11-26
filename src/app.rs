@@ -42,7 +42,7 @@ impl AppModel {
     fn workspace_button(&self, workspace: &WorkspaceInfo) -> Element<'_, Message> {
         // Calculate icon size based on panel height (use ~60% of panel height, capped)
         let icon_size = if let Some(b) = self.core.applet.suggested_bounds {
-            (b.height as f32 * 0.6).min(24.0).max(12.0) as u16
+            (b.height * 0.6).min(24.0).max(12.0) as u16
         } else {
             16
         };

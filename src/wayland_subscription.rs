@@ -152,14 +152,31 @@ impl WorkspaceHandler for AppData {
 
             for workspace_handle in &group.workspaces {
                 if let Some(workspace) = self.workspace_state.workspace_info(workspace_handle) {
-                    let mut toplevel_ids = Vec::new();
+                    let mut top_levels_with_pos = Vec::new();
                     
-                    // Find all top_levels in this workspace
+                    // Find all top_levels in this workspace with their position
                     for (toplevel_handle, toplevel_workspaces) in &self.toplevel_workspaces {
                         if toplevel_workspaces.contains(workspace_handle) {
-                            toplevel_ids.push(toplevel_handle.id().to_string());
+                            if let Some(info) = self.toplevel_info_state.info(toplevel_handle) {
+                                // Get position from geometry for the current output
+                                let (x_pos, y_pos) = self.expected_output.as_ref()
+                                    .and_then(|output| info.geometry.get(output))
+                                    .map(|g| (g.x, g.y))
+                                    .or_else(|| info.geometry.values().next().map(|g| (g.x, g.y)))
+                                    .unwrap_or((0, 0));
+                                top_levels_with_pos.push((toplevel_handle.id().to_string(), x_pos, y_pos));
+                            } else {
+                                // Fallback if no info available
+                                top_levels_with_pos.push((toplevel_handle.id().to_string(), 0, 0));
+                            }
                         }
                     }
+                    
+                    // Sort by x position (left to right), then by y position (top to bottom)
+                    top_levels_with_pos.sort_by_key(|(_, x, y)| (*x, *y));
+                    let toplevel_ids: Vec<String> = top_levels_with_pos.into_iter()
+                        .map(|(id, _, _)| id)
+                        .collect();
 
                     workspaces.push(WorkspaceInfo {
                         name: workspace.name.clone(),
