@@ -1,6 +1,14 @@
 # Cosmic Applet Workspaces Apps
 
-An application for the COSMIC™ desktop
+An applet for the COSMIC desktop that displays workspace numbers and icons for open applications. This applet was inspired by the gnome shell extension [Workspace indicator by open apps](https://github.com/Favo02/workspaces-by-open-apps).
+
+>⚠️ **Warning:** This applet is in an early development stage and heavily vibe coded. Use at your own risk!
+
+## Features
+- Shows numbers for open workspaces
+- Shows icons for open applications in each workspace
+- Indicates which workspace and application that is currently active
+  - (the active application indicator does not work very well... yet)
 
 ## Installation
 
