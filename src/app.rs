@@ -62,7 +62,7 @@ impl AppModel {
                 // Scale text with panel size
                 (size as f32 * 0.4).max(10.0) as u16
             }
-            Size::Hardcoded((w, h)) => 14,
+            Size::Hardcoded((_w, _h)) => 14,
         };
 
         let spacing = self.core.applet.spacing as f32;
@@ -267,7 +267,7 @@ impl cosmic::Application for AppModel {
                 for (ws_id, toplevels_by_id) in ws_toplevels {
                     let mut toplevels: Vec<AppToplevel> =
                         toplevels_by_id.values().cloned().collect();
-                    toplevels.sort_by(|a, b| a.id.cmp(&b.id));
+                    toplevels.sort_by_key(|tl| (tl.geometry.0, tl.geometry.1));
                     transformed.insert(ws_id, toplevels);
                     if let Some(changed_toplevel) = toplevels_by_id.get(&changed_toplevel_id) {
                         // FIXME: This is used for, later, checking if we have the app icon and fetching if we do not.
