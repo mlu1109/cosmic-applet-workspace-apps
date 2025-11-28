@@ -54,20 +54,21 @@ pub struct AppToplevel {
     pub app_id: String,
     pub is_active: bool,
     pub workspace_id: String, // FIXME: Assumes that a toplevel is only on one workspace
-    //pub geometry: Option<(i32, i32, i32, i32)>, // (x, y, width, height)
+    pub geometry: (i32, i32, i32, i32), // x, y, width, height
 }
 
 impl AppToplevel {
-    pub fn new(handle: &ExtForeignToplevelHandleV1, info: &ToplevelInfo) -> Self {
+    pub fn new(handle: &ExtForeignToplevelHandleV1, info: &ToplevelInfo, wl_output: Option<&WlOutput>) -> Self {
         let id = handle.id().to_string();
         let app_id = info.app_id.clone();
         let is_active = info.state.contains(&zcosmic_toplevel_handle_v1::State::Activated);
+        let geometry = wl_output.map(|output| info.geometry.get(output)).flatten().map(|geometry| (geometry.x, geometry.y, geometry.width, geometry.height)).unwrap_or_default();
         let workspace_id = if let Some(ws) = info.workspace.iter().find(|_| true) {
             ws.id().clone().to_string()
         } else {
             "???".to_string() // FIXME: Do something, pick the first workspace? "Fallback workspace"?
         };
-        AppToplevel { id, app_id, is_active, workspace_id }
+        AppToplevel { id, app_id, is_active, workspace_id, geometry }
     }
 }
 
@@ -220,7 +221,7 @@ impl ToplevelInfoHandler for AppData {
         toplevel: &ExtForeignToplevelHandleV1,
     ) {
         if let Some(info) = self.toplevel_info_state.info(toplevel) {
-            let toplevel = AppToplevel::new(toplevel, info);
+            let toplevel = AppToplevel::new(toplevel, info, self.expected_output.as_ref());
             let toplevel_id = toplevel.id.clone();
             self.add_top_level(toplevel);
             self.send_event(WaylandEvent::ToplevelsUpdated(toplevel_id, self.workspace_toplevels.clone()));
@@ -235,7 +236,7 @@ impl ToplevelInfoHandler for AppData {
         toplevel: &ExtForeignToplevelHandleV1,
     ) {
         if let Some(info) = self.toplevel_info_state.info(toplevel) {
-            let new_app_top_level = AppToplevel::new(toplevel, info);
+            let new_app_top_level = AppToplevel::new(toplevel, info, self.expected_output.as_ref());
             let old_app_top_level = self.get_matching_toplevel(new_app_top_level.clone());
             if Some(&new_app_top_level) == old_app_top_level {
                 return;
