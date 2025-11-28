@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::config::Config;
-use crate::wayland_subscription::{self, WorkspaceEvent, WorkspaceInfo, ToplevelAppInfo};
+use crate::wayland_subscription::{self, AppToplevel, AppWorkspace, WaylandEvent};
+use cosmic::Action::App;
 use cosmic::applet::Size;
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::{Limits, Subscription};
@@ -10,7 +11,6 @@ use cosmic::widget;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::LazyLock;
-use cosmic::Action::App;
 
 static AUTOSIZE_MAIN_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("autosize-main"));
 
@@ -23,24 +23,37 @@ pub struct AppModel {
     /// Configuration data that persists between application runs.
     config: Config,
     /// Current workspaces
-    workspaces: Vec<WorkspaceInfo>,
+    workspaces: Vec<AppWorkspace>,
     /// Current applications
-    top_levels: HashMap<String, ToplevelAppInfo>,
+    workspace_toplevels: HashMap<String, Vec<AppToplevel>>,
     /// App icon cache
-    app_icons: HashMap<String, Option<PathBuf>>,
+    app_icons: HashMap<String, widget::icon::Icon>,
 }
 
 /// Messages emitted by the application and its widgets.
 #[derive(Debug, Clone)]
 pub enum Message {
     UpdateConfig(Config),
-    WorkspaceEvent(WorkspaceEvent),
+    WaylandEvent(WaylandEvent),
     IconLoaded(String, Option<PathBuf>),
 }
 
 /// Create a COSMIC application from the app model
 impl AppModel {
-    fn workspace_button(&self, workspace: &WorkspaceInfo) -> Element<'_, Message> {
+    fn get_workspace_toplevels(&self, workspace: &AppWorkspace) -> Vec<AppToplevel> {
+        let res = self.workspace_toplevels.get(workspace.id.as_str());
+        if let Some(res) = res {
+            res.clone()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn should_load_app_icon(&self, app_id: &str) -> bool {
+        !self.app_icons.contains_key(app_id)
+    }
+
+    fn new_workspace_button(&self, workspace: &AppWorkspace) -> Element<'_, Message> {
         // Use the applet context to get proper sizing based on panel configuration
         let icon_size = self.core.applet.suggested_size(true).0;
         let text_size = match &self.core.applet.size {
@@ -49,11 +62,9 @@ impl AppModel {
                 // Scale text with panel size
                 (size as f32 * 0.4).max(10.0) as u16
             }
-            Size::Hardcoded((w, h)) => {
-                14
-            }
+            Size::Hardcoded((w, h)) => 14,
         };
-        
+
         let spacing = self.core.applet.spacing as f32;
         let icon_spacing = self.core.applet.spacing as f32 * 0.5;
         let (padding_major, padding_minor) = self.core.applet.suggested_padding(true);
@@ -62,14 +73,13 @@ impl AppModel {
         } else {
             [padding_major as f32, padding_minor as f32]
         };
-        
+
         let mut content = widget::row()
             .spacing(icon_spacing)
             .align_y(cosmic::iced::Alignment::Center);
-        
-        let text = widget::text(format!("{}", workspace.name))
-            .size(text_size);
-        
+
+        let text = widget::text(format!("{}", workspace.name)).size(text_size);
+
         let text = if workspace.is_active {
             text.font(cosmic::iced::Font {
                 weight: cosmic::iced::font::Weight::Bold,
@@ -78,22 +88,22 @@ impl AppModel {
         } else {
             text
         };
-        
+
         content = content.push(text);
 
-        if !workspace.top_levels.is_empty() {
+        let ws_top_levels = self.get_workspace_toplevels(workspace);
+
+        if !ws_top_levels.is_empty() {
             content = content.push(widget::horizontal_space().width(spacing));
         }
 
-        for toplevel_id in &workspace.top_levels {
-            if let Some(toplevel_info) = self.top_levels.get(toplevel_id) {
-                let element = self.application_icon(
-                    &toplevel_info.app_id,
-                    toplevel_info.is_active,
-                    icon_size,
-                );
-                content = content.push(element);
-            }
+        for toplevel in ws_top_levels {
+            let element = self.new_application_icon_element(
+                toplevel.app_id.as_str(),
+                toplevel.is_active,
+                icon_size,
+            );
+            content = content.push(element);
         }
 
         let is_active = workspace.is_active;
@@ -126,17 +136,22 @@ impl AppModel {
         container.into()
     }
 
-    fn application_icon(&self, app_id: &str, is_active: bool, icon_size: u16) -> Element<'_, Message> {
-        let icon_path = self.app_icons.get(app_id).and_then(|p| p.as_ref());
-        
-        let element = if let Some(path) = icon_path {
-            widget::icon::from_path(path.clone())
-                .icon()
+    fn new_application_icon_element(
+        &self,
+        app_id: &str,
+        is_active: bool,
+        icon_size: u16,
+    ) -> Element<'_, Message> {
+        let icon = self.app_icons.get(app_id);
+
+        let element = if let Some(icon) = icon {
+            icon.clone()
                 .size(icon_size)
                 .into()
         } else {
             const FALLBACK_ICON: &[u8] = include_bytes!("../resources/fallback-icon.svg");
-            widget::icon::from_svg_bytes(FALLBACK_ICON).icon()
+            widget::icon::from_svg_bytes(FALLBACK_ICON)
+                .icon()
                 .size(icon_size)
                 .into()
         };
@@ -217,17 +232,13 @@ impl cosmic::Application for AppModel {
     /// activated by selectively appending to the subscription batch, and will
     /// continue to execute for the duration that they remain in the batch.
     fn subscription(&self) -> Subscription<Self::Message> {
-
         let subscriptions = vec![
             // Watch for application configuration changes.
             self.core()
                 .watch_config::<Config>(Self::APP_ID)
-                .map(|update| {
-                    Message::UpdateConfig(update.config)
-                }),
+                .map(|update| Message::UpdateConfig(update.config)),
             // Workspace subscription
-            wayland_subscription::workspace_subscription()
-                .map(Message::WorkspaceEvent),
+            wayland_subscription::workspace_subscription().map(Message::WaylandEvent),
         ];
 
         Subscription::batch(subscriptions)
@@ -243,52 +254,45 @@ impl cosmic::Application for AppModel {
             Message::UpdateConfig(config) => {
                 self.config = config;
             }
-            Message::WorkspaceEvent(WorkspaceEvent::WorkspacesChanged(workspaces)) => {
+            Message::WaylandEvent(WaylandEvent::WorkspacesChanged(workspaces)) => {
                 self.workspaces = workspaces;
                 self.workspaces.sort_by(|a, b| a.name.cmp(&b.name));
-
-                // Collect all app_ids that need icons
-                let mut app_ids_to_load = Vec::new();
-                for ws in &self.workspaces {
-                    for toplevel_id in &ws.top_levels {
-                        if let Some(toplevel_info) = self.top_levels.get(toplevel_id) {
-                            let app_id = toplevel_info.app_id.clone();
-                            if !self.app_icons.contains_key(&app_id) {
-                                app_ids_to_load.push(app_id);
-                            }
-                        }
+            }
+            Message::WaylandEvent(WaylandEvent::ToplevelsUpdated(
+                changed_toplevel_id,
+                ws_toplevels,
+            )) => {
+                let mut transformed = HashMap::new();
+                let mut app_id: Option<String> = None;
+                for (ws_id, toplevels_by_id) in ws_toplevels {
+                    let mut toplevels: Vec<AppToplevel> =
+                        toplevels_by_id.values().cloned().collect();
+                    toplevels.sort_by(|a, b| a.id.cmp(&b.id));
+                    transformed.insert(ws_id, toplevels);
+                    if let Some(changed_toplevel) = toplevels_by_id.get(&changed_toplevel_id) {
+                        // FIXME: This is used for, later, checking if we have the app icon and fetching if we do not.
+                        //        Looks pretty hacky, we should do this somewhere else...
+                        app_id = Some(changed_toplevel.app_id.clone())
                     }
                 }
-
-                // Load icons asynchronously
-                let tasks: Vec<_> = app_ids_to_load.into_iter().map(|app_id| {
-                    Task::perform(
-                        load_app_icon(app_id.clone()),
-                        move |path| App(Message::IconLoaded(app_id.clone(), path))
-                    )
-                }).collect();
-                return Task::batch(tasks);
-            }
-            Message::WorkspaceEvent(WorkspaceEvent::ToplevelAdded(toplevel)) => {
-                self.top_levels.insert(toplevel.id.clone(), toplevel.clone());
-
-                // Load icon if not already loaded
-                if !self.app_icons.contains_key(&toplevel.app_id) {
-                    let app_id = toplevel.app_id.clone();
-                    return Task::perform(
-                        load_app_icon(app_id.clone()),
-                        move |path| App(Message::IconLoaded(app_id.clone(), path))
-                    );
+                self.workspace_toplevels = transformed;
+                // Load icon for changed toplevel if we do not have it already
+                if let Some(app_id) = app_id
+                    && self.should_load_app_icon(app_id.as_str())
+                {
+                    return Task::perform(load_app_icon(app_id.to_string()), move |path| {
+                        App(Message::IconLoaded(app_id.clone(), path))
+                    });
                 }
             }
-            Message::WorkspaceEvent(WorkspaceEvent::ToplevelUpdated(toplevel)) => {
-                self.top_levels.insert(toplevel.id.clone(), toplevel);
-            }
-            Message::WorkspaceEvent(WorkspaceEvent::ToplevelRemoved(id)) => {
-                self.top_levels.remove(&id);
-            }
-            Message::IconLoaded(app_id, path) => {
-                self.app_icons.insert(app_id, path);
+            Message::IconLoaded(app_id, icon_path) => {
+                let icon = if let Some(icon_path) = icon_path {
+                    widget::icon::from_path(icon_path).icon()
+                } else {
+                    const FALLBACK_ICON: &[u8] = include_bytes!("../resources/fallback-icon.svg");
+                    widget::icon::from_svg_bytes(FALLBACK_ICON).icon()
+                };
+                self.app_icons.insert(app_id, icon);
             }
         }
         Task::none()
@@ -309,14 +313,14 @@ impl cosmic::Application for AppModel {
             }
             Size::Hardcoded(_) => 14,
         };
-        
+
         let mut row = widget::row().spacing(row_spacing);
 
         if self.workspaces.is_empty() {
             row = row.push(widget::text("...").size(text_size));
         } else {
             for workspace in &self.workspaces {
-                row = row.push(self.workspace_button(workspace));
+                row = row.push(self.new_workspace_button(workspace));
             }
         }
 
@@ -330,12 +334,9 @@ impl cosmic::Application for AppModel {
             }
         }
 
-        widget::autosize::autosize(
-            widget::container(row).padding(0),
-            AUTOSIZE_MAIN_ID.clone(),
-        )
-        .limits(limits)
-        .into()
+        widget::autosize::autosize(widget::container(row).padding(0), AUTOSIZE_MAIN_ID.clone())
+            .limits(limits)
+            .into()
     }
 
     fn style(&self) -> Option<cosmic::iced_runtime::Appearance> {
@@ -343,46 +344,54 @@ impl cosmic::Application for AppModel {
     }
 }
 
-async fn load_app_icon(app_id: String) -> Option<PathBuf> {
+async fn load_app_icon_path(app_id: String) -> Option<PathBuf> {
     tokio::task::spawn_blocking(move || {
         // Try direct lookup first
         if let Some(path) = freedesktop_icons::lookup(&app_id)
             .with_size(16)
             .with_cache()
-            .find() {
+            .find()
+        {
             return Some(path);
         }
-        
+
         // Try case-insensitive lookup
         let app_id_lower = app_id.to_lowercase();
         if let Some(path) = freedesktop_icons::lookup(&app_id_lower)
             .with_size(16)
             .with_cache()
-            .find() {
+            .find()
+        {
             return Some(path);
         }
-        
+
         // Search desktop files for matching StartupWMClass
         if let Some(icon_name) = find_icon_from_desktop_file(&app_id) {
             // Try the icon name from desktop file
             if let Some(path) = freedesktop_icons::lookup(&icon_name)
                 .with_size(16)
                 .with_cache()
-                .find() {
+                .find()
+            {
                 return Some(path);
             }
-            
+
             // If icon is an absolute path, use it directly
-            if std::path::Path::new(&icon_name).is_absolute() && std::path::Path::new(&icon_name).exists() {
+            if std::path::Path::new(&icon_name).is_absolute()
+                && std::path::Path::new(&icon_name).exists()
+            {
                 return Some(PathBuf::from(icon_name));
             }
         }
-        
+
         // No icon found
         None
     })
-    .await
-    .unwrap_or_default()
+        .await
+        .unwrap_or_default()
+}
+async fn load_app_icon(app_id: String) -> Option<PathBuf> {
+    load_app_icon_path(app_id).await
 }
 
 fn find_icon_from_desktop_file(app_id: &str) -> Option<String> {
@@ -391,11 +400,14 @@ fn find_icon_from_desktop_file(app_id: &str) -> Option<String> {
 
     // Get data directories with proper defaults
     let xdg_data_home = std::env::var("XDG_DATA_HOME").ok().or_else(|| {
-        std::env::var("HOME").ok().map(|home| format!("{}/.local/share", home))
+        std::env::var("HOME")
+            .ok()
+            .map(|home| format!("{}/.local/share", home))
     });
-    let xdg_data_dirs = std::env::var("XDG_DATA_DIRS").ok()
+    let xdg_data_dirs = std::env::var("XDG_DATA_DIRS")
+        .ok()
         .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string());
-    
+
     // Build search paths
     let mut search_paths = Vec::new();
     if let Some(data_home) = xdg_data_home {
@@ -405,37 +417,34 @@ fn find_icon_from_desktop_file(app_id: &str) -> Option<String> {
         search_paths.push(dir.to_string());
     }
 
-    let icon_name = search_paths
-        .iter()
-        .find_map(|dir| {
-            let app_dir = format!("{}/applications", dir);
-                    if let Ok(entries) = fs::read_dir(app_dir) {
-                        for entry in entries.flatten() {
-                            if let Ok(file) = fs::File::open(entry.path()) {
-                                let reader = BufReader::new(file);
-                                let mut icon_name = None;
-                                let mut matches = false;
+    let icon_name = search_paths.iter().find_map(|dir| {
+        let app_dir = format!("{}/applications", dir);
+        if let Ok(entries) = fs::read_dir(app_dir) {
+            for entry in entries.flatten() {
+                if let Ok(file) = fs::File::open(entry.path()) {
+                    let reader = BufReader::new(file);
+                    let mut icon_name = None;
+                    let mut matches = false;
 
-                                for line in reader.lines().flatten() {
-                                    if line.starts_with("Icon=") {
-                                        icon_name = Some(line[5..].to_string());
-                                    } else if line.starts_with("StartupWMClass=") {
-                                        let wm_class = &line[15..];
-                                        if wm_class.eq_ignore_ascii_case(app_id) {
-                                            matches = true;
-                                        }
-                                    }
-                                }
-
-                                if matches && icon_name.is_some() {
-                                    return icon_name;
-                                }
+                    for line in reader.lines().flatten() {
+                        if line.starts_with("Icon=") {
+                            icon_name = Some(line[5..].to_string());
+                        } else if line.starts_with("StartupWMClass=") {
+                            let wm_class = &line[15..];
+                            if wm_class.eq_ignore_ascii_case(app_id) {
+                                matches = true;
                             }
                         }
                     }
-            None
-        });
 
+                    if matches && icon_name.is_some() {
+                        return icon_name;
+                    }
+                }
+            }
+        }
+        None
+    });
 
     icon_name
 }
