@@ -395,7 +395,11 @@ async fn start(conn: Connection) -> mpsc::Receiver<WaylandEvent> {
         // blocking_dispatch() blocks until events arrive, then calls the appropriate
         // handler methods on app_data based on the delegate macros above
         loop {
-            event_queue.blocking_dispatch(&mut app_data).unwrap();
+            event_queue.blocking_dispatch(&mut app_data).unwrap_or_else(|err| {
+                // TODO: Handle Wayland disconnection gracefully
+                eprintln!("Wayland event dispatch error: {:?}", err);
+                0
+            });
         }
     });
 
