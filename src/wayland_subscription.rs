@@ -145,9 +145,11 @@ impl AppData {
 
     fn add_top_level(&mut self, toplevel: AppToplevel) {
         let ws_id = &toplevel.workspace_id;
+        let tl_id = toplevel.id.clone();
+        self.remove_toplevel(tl_id.as_str());
         let mut ws_toplevels = self.workspace_toplevels.get(ws_id).cloned().unwrap_or_default();
-        ws_toplevels.insert(toplevel.id.clone(), toplevel.clone());
-        self.workspace_toplevels.insert(ws_id.to_string(), ws_toplevels); // TODO: Necessary?
+        ws_toplevels.insert(tl_id, toplevel.clone());
+        self.workspace_toplevels.insert(ws_id.to_string(), ws_toplevels);
         self.toplevels.insert(toplevel.id.clone(), toplevel);
     }
 
