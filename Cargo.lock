@@ -972,6 +972,7 @@ dependencies = [
  "i18n-embed",
  "i18n-embed-fl",
  "libcosmic",
+ "log",
  "rust-embed",
  "tokio",
  "wayland-protocols",

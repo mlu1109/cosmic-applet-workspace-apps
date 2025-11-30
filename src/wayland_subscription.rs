@@ -123,14 +123,18 @@ pub struct AppData {
 
 impl AppData {
     fn get_workspace_from_handle(&self, handle: &ExtWorkspaceHandleV1) -> Option<AppWorkspace> {
-        self.workspace_state.workspace_info(handle).and_then(|ws| {
-            AppWorkspace::new(ws)
-        })
+        if let Some(ws_info) = self.workspace_state.workspace_info(handle) {
+            AppWorkspace::new(ws_info)
+        } else {
+            log::debug!("workspace_handle_id={} info not found", handle.id());
+            None
+        }
     }
 
     fn get_toplevel_from_handle(&self, handle: &ExtForeignToplevelHandleV1) -> Option<AppToplevel> {
         let tl_info = self.toplevel_info_state.info(handle);
         if tl_info.is_none() {
+            log::debug!("toplevel_handle_id={} info not found", handle.id());
             return None;
         }
         let ws = tl_info?.workspace
@@ -138,6 +142,7 @@ impl AppData {
             .filter_map(|ws_handle| self.get_workspace_from_handle(ws_handle))
             .last();
         if ws.is_none() {
+            log::debug!("toplevel_id={} workspace info not found", tl_info?.identifier);
             return None;
         }
         Some(AppToplevel::new(tl_info?, &ws?, self.expected_output.as_ref()))
@@ -175,7 +180,11 @@ impl AppData {
             if let Some(ws_toplevels) = self.workspace_toplevels.get_mut(ws_id) {
                 ws_toplevels.remove(id);
                 return true
+            } else {
+                log::debug!("toplevel_id={} remove - workspace not found", id);
             }
+        } else {
+            log::debug!("toplevel_id={} remove ignored - toplevel not found", id);
         }
         false
     }
@@ -204,6 +213,8 @@ impl WorkspaceHandler for AppData {
             for workspace_handle in &group.workspaces {
                 if let Some(ws) = self.get_workspace_from_handle(workspace_handle) {
                     new_state.push(ws);
+                } else {
+                    log::debug!("workspace_handle_id={} could not retrieve workspace info", workspace_handle.id());
                 }
             }
         }
@@ -241,6 +252,8 @@ impl ToplevelInfoHandler for AppData {
             let tl_id = tl.id.clone();
             self.add_top_level(tl);
             self.send_event(WaylandEvent::ToplevelsUpdated(tl_id, self.workspace_toplevels.clone()));
+        } else {
+            log::debug!("toplevel_handle_id={} ignored - could not retrieve toplevel info from handle", handle.id());
         }
     }
 
@@ -258,6 +271,8 @@ impl ToplevelInfoHandler for AppData {
                 let tl_id = new_app_toplevel.id.clone();
                 self.add_top_level(new_app_toplevel);
                 self.send_event(WaylandEvent::ToplevelsUpdated(tl_id, self.workspace_toplevels.clone()));
+            } else {
+                log::debug!("toplevel_id={}, app_id={} update ignored - no changes detected", new_app_toplevel.id, new_app_toplevel.app_id);
             }
         }
     }
@@ -276,6 +291,8 @@ impl ToplevelInfoHandler for AppData {
             if removed {
                 self.send_event(WaylandEvent::ToplevelsUpdated(tl_id, self.workspace_toplevels.clone()));
             }
+        } else {
+            log::debug!("toplevel_handle_id={} close ignored - could not retrieve toplevel info from handle", handle.id());
         }
     }
 }
