@@ -24,6 +24,7 @@ use futures_channel::mpsc;
 use futures_util::StreamExt;
 use std::{collections::HashMap, thread};
 use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1;
+use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::ExtWorkspaceHandleV1;
 
 #[derive(Clone, Debug)]
 pub enum WaylandEvent {
@@ -33,17 +34,17 @@ pub enum WaylandEvent {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppWorkspace {
-    pub id: String, // TODO: Use ObjectId?
+    pub id: String,
     pub name: String,
     pub is_active: bool,
 }
 
 impl AppWorkspace {
-    pub fn new(info: &Workspace) -> Self {
-        let id = info.handle.id().to_string();
+    pub fn new(info: &Workspace) -> Option<AppWorkspace> {
+        let id = info.name.clone();
         let name = info.name.clone();
         let is_active = info.state.contains(ext_workspace_handle_v1::State::Active);
-        AppWorkspace { id, name, is_active }
+        Some(AppWorkspace { id, name, is_active })
     }
 }
 
@@ -53,22 +54,17 @@ pub struct AppToplevel {
     pub id: String,
     pub app_id: String,
     pub is_active: bool,
-    pub workspace_id: String, // FIXME: Assumes that a toplevel is only on one workspace
+    pub workspace_id: String,
     pub geometry: (i32, i32, i32, i32), // x, y, width, height
 }
 
 impl AppToplevel {
-    pub fn new(handle: &ExtForeignToplevelHandleV1, info: &ToplevelInfo, wl_output: Option<&WlOutput>) -> Self {
-        let id = handle.id().to_string();
+    pub fn new(info: &ToplevelInfo, workspace: &AppWorkspace, wl_output: Option<&WlOutput>) -> Self {
+        let id = info.identifier.clone();
         let app_id = info.app_id.clone();
         let is_active = info.state.contains(&zcosmic_toplevel_handle_v1::State::Activated);
         let geometry = wl_output.map(|output| info.geometry.get(output)).flatten().map(|geometry| (geometry.x, geometry.y, geometry.width, geometry.height)).unwrap_or_default();
-        let workspace_id = if let Some(ws) = info.workspace.iter().find(|_| true) {
-            ws.id().clone().to_string()
-        } else {
-            "???".to_string() // FIXME: Do something, pick the first workspace? "Fallback workspace"?
-        };
-        AppToplevel { id, app_id, is_active, workspace_id, geometry }
+        AppToplevel { id, app_id, workspace_id: workspace.id.clone(), is_active, geometry }
     }
 }
 
@@ -126,13 +122,33 @@ pub struct AppData {
 }
 
 impl AppData {
+    fn get_workspace_from_handle(&self, handle: &ExtWorkspaceHandleV1) -> Option<AppWorkspace> {
+        self.workspace_state.workspace_info(handle).and_then(|ws| {
+            AppWorkspace::new(ws)
+        })
+    }
+
+    fn get_toplevel_from_handle(&self, handle: &ExtForeignToplevelHandleV1) -> Option<AppToplevel> {
+        let tl_info = self.toplevel_info_state.info(handle);
+        if tl_info.is_none() {
+            return None;
+        }
+        let ws = tl_info?.workspace
+            .iter()
+            .filter_map(|ws_handle| self.get_workspace_from_handle(ws_handle))
+            .last();
+        if ws.is_none() {
+            return None;
+        }
+        Some(AppToplevel::new(tl_info?, &ws?, self.expected_output.as_ref()))
+    }
+
     fn send_event(&mut self, event: WaylandEvent) {
         let _ = self.sender.try_send(event);
     }
 
-    fn get_matching_toplevel(&self, toplevel: AppToplevel) -> Option<&AppToplevel> {
-        let ws = toplevel.workspace_id;
-        self.workspace_toplevels.get(ws.as_str()).and_then(|ws_toplevels| ws_toplevels.get(&toplevel.id))
+    fn get_matching_toplevel(&self, toplevel: &AppToplevel) -> Option<&AppToplevel> {
+        self.workspace_toplevels.get(&toplevel.workspace_id).and_then(|ws_toplevels| ws_toplevels.get(&toplevel.id))
     }
 
     fn is_active_output(&self, output: &WlOutput) -> bool {
@@ -186,9 +202,8 @@ impl WorkspaceHandler for AppData {
                 continue;
             }
             for workspace_handle in &group.workspaces {
-                if let Some(workspace) = self.workspace_state.workspace_info(workspace_handle) {
-                    let app_workspace = AppWorkspace::new(workspace);
-                    new_state.push(app_workspace);
+                if let Some(ws) = self.get_workspace_from_handle(workspace_handle) {
+                    new_state.push(ws);
                 }
             }
         }
@@ -220,13 +235,12 @@ impl ToplevelInfoHandler for AppData {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        toplevel: &ExtForeignToplevelHandleV1,
+        handle: &ExtForeignToplevelHandleV1,
     ) {
-        if let Some(info) = self.toplevel_info_state.info(toplevel) {
-            let toplevel = AppToplevel::new(toplevel, info, self.expected_output.as_ref());
-            let toplevel_id = toplevel.id.clone();
-            self.add_top_level(toplevel);
-            self.send_event(WaylandEvent::ToplevelsUpdated(toplevel_id, self.workspace_toplevels.clone()));
+        if let Some(tl) = self.get_toplevel_from_handle(handle) {
+            let tl_id = tl.id.clone();
+            self.add_top_level(tl);
+            self.send_event(WaylandEvent::ToplevelsUpdated(tl_id, self.workspace_toplevels.clone()));
         }
     }
 
@@ -237,15 +251,14 @@ impl ToplevelInfoHandler for AppData {
         _qh: &QueueHandle<Self>,
         toplevel: &ExtForeignToplevelHandleV1,
     ) {
-        if let Some(info) = self.toplevel_info_state.info(toplevel) {
-            let new_app_top_level = AppToplevel::new(toplevel, info, self.expected_output.as_ref());
-            let old_app_top_level = self.get_matching_toplevel(new_app_top_level.clone());
-            if Some(&new_app_top_level) == old_app_top_level {
-                return;
+        if let Some(new_app_toplevel) = self.get_toplevel_from_handle(toplevel) {
+            let old_app_toplevel = self.get_matching_toplevel(&new_app_toplevel);
+            let equals = old_app_toplevel.map(|old_app_top_level| *old_app_top_level == new_app_toplevel).unwrap_or(false);
+            if !equals {
+                let tl_id = new_app_toplevel.id.clone();
+                self.add_top_level(new_app_toplevel);
+                self.send_event(WaylandEvent::ToplevelsUpdated(tl_id, self.workspace_toplevels.clone()));
             }
-            let toplevel_id = new_app_top_level.id.clone();
-            self.add_top_level(new_app_top_level);
-            self.send_event(WaylandEvent::ToplevelsUpdated(toplevel_id, self.workspace_toplevels.clone()));
         }
     }
 
@@ -254,12 +267,15 @@ impl ToplevelInfoHandler for AppData {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        toplevel: &ExtForeignToplevelHandleV1,
+        handle: &ExtForeignToplevelHandleV1,
     ) {
-        let toplevel_id = toplevel.id().to_string();
-        let removed = self.remove_toplevel(toplevel_id.as_str());
-        if removed {
-            self.send_event(WaylandEvent::ToplevelsUpdated(toplevel_id, self.workspace_toplevels.clone()));
+        let tl = self.get_toplevel_from_handle(handle);
+        if let Some(toplevel) = tl {
+            let tl_id = toplevel.id;
+            let removed = self.remove_toplevel(tl_id.as_str());
+            if removed {
+                self.send_event(WaylandEvent::ToplevelsUpdated(tl_id, self.workspace_toplevels.clone()));
+            }
         }
     }
 }
