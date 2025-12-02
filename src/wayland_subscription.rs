@@ -111,11 +111,10 @@ pub struct AppData {
     sender: mpsc::Sender<WaylandEvent>,
 
     // Mirrored app state
-    workspaces: Vec<AppWorkspace>,
+    workspaces: HashMap<String, AppWorkspace>,
     toplevels: HashMap<String, AppToplevel>,
     workspace_toplevels: HashMap<String, HashMap<String, AppToplevel>>,
-
-
+    
     // Output (monitor) filtering - which display this applet is running on
     configured_output: String,               // Name from COSMIC_PANEL_OUTPUT env var
     expected_output: Option<WlOutput>,       // Resolved Wayland output object
@@ -203,7 +202,7 @@ impl WorkspaceHandler for AppData {
     /// Called when the compositor has finished sending all workspace state updates.
     /// This is where we process the accumulated changes and send them to the app.
     fn done(&mut self) {
-        let mut new_state = Vec::new();
+        let mut new_state = HashMap::new();
 
         for group in self.workspace_state.workspace_groups() {
             let include = group.outputs.iter().any(|output| self.is_active_output(output));
@@ -212,22 +211,26 @@ impl WorkspaceHandler for AppData {
             }
             for workspace_handle in &group.workspaces {
                 if let Some(ws) = self.get_workspace_from_handle(workspace_handle) {
-                    new_state.push(ws);
+                    new_state.insert(ws.id.clone(), ws);
                 } else {
                     log::debug!("workspace_handle_id={} could not retrieve workspace info", workspace_handle.id());
                 }
             }
         }
-        new_state.sort_by(|a, b| a.name.cmp(&b.name));
-
-        let old_state = self.workspaces.clone();
-        if old_state == new_state {
+        let old_state = &self.workspaces;
+        if *old_state == new_state {
             return;
         }
 
-        self.workspaces = new_state;
+        let removed_keys = old_state.keys().filter(|&k| !new_state.contains_key(k)).cloned().collect::<Vec<_>>();
+        for key in removed_keys {
+            self.workspace_toplevels.remove(&key);
+        }
 
-        self.send_event(WaylandEvent::WorkspacesChanged(self.workspaces.clone()));
+        self.workspaces = new_state;
+        let mut workspaces_vec = self.workspaces.values().cloned().collect::<Vec<_>>();
+        workspaces_vec.sort_by_key(|ws| ws.name.clone());
+        self.send_event(WaylandEvent::WorkspacesChanged(workspaces_vec));
     }
 }
 
@@ -419,7 +422,7 @@ async fn start(conn: Connection) -> mpsc::Receiver<WaylandEvent> {
             sender,
             toplevels: HashMap::new(),
             workspace_toplevels: HashMap::new(),
-            workspaces: Vec::new(),
+            workspaces: HashMap::new(),
             configured_output,
             expected_output: None,
         };
