@@ -11,6 +11,7 @@ use cosmic::widget;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::ExtWorkspaceHandleV1;
 
 static AUTOSIZE_MAIN_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("autosize-main"));
 
@@ -25,7 +26,7 @@ pub struct AppModel {
     /// Current workspaces
     workspaces: Vec<AppWorkspace>,
     /// Current applications
-    workspace_toplevels: HashMap<String, Vec<AppToplevel>>,
+    workspace_toplevels: HashMap<ExtWorkspaceHandleV1, Vec<AppToplevel>>,
     /// App icon cache
     app_icons: HashMap<String, widget::icon::Icon>,
 }
@@ -41,7 +42,7 @@ pub enum Message {
 /// Create a COSMIC application from the app model
 impl AppModel {
     fn get_workspace_toplevels(&self, workspace: &AppWorkspace) -> Vec<AppToplevel> {
-        let res = self.workspace_toplevels.get(workspace.id.as_str());
+        let res = self.workspace_toplevels.get(&workspace.handle);
         if let Some(res) = res {
             res.clone()
         } else {
