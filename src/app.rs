@@ -257,7 +257,7 @@ impl cosmic::Application for AppModel {
             }
             Message::WaylandEvent(WaylandEvent::WorkspacesChanged(workspaces)) => {
                 self.workspaces = workspaces;
-                self.workspaces.sort_by(|a, b| a.name.cmp(&b.name));
+                self.workspaces.sort_by_key(|ws| ws.coordinates);
             }
             Message::WaylandEvent(WaylandEvent::ToplevelsUpdated(
                 changed_toplevel_id,
@@ -268,7 +268,7 @@ impl cosmic::Application for AppModel {
                 for (ws_id, toplevels_by_id) in ws_toplevels {
                     let mut toplevels: Vec<AppToplevel> =
                         toplevels_by_id.values().cloned().collect();
-                    toplevels.sort_by_key(|tl| (tl.geometry.0, tl.geometry.1));
+                    toplevels.sort_by_key(|tl| tl.coordinates);
                     transformed.insert(ws_id, toplevels);
                     if let Some(changed_toplevel) = toplevels_by_id.get(&changed_toplevel_id) {
                         // FIXME: This is used for, later, checking if we have the app icon and fetching if we do not.
