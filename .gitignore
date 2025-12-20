@@ -1,3 +1,5 @@
+.idea
+
 .cargo/
 *.pdb
 **/*.rs.bk
