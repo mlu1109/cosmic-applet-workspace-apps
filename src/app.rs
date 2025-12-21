@@ -1,23 +1,19 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::config::Config;
+use crate::icons::Icons;
 use crate::wayland_subscription::{self, AppToplevel, AppWorkspace, WaylandEvent};
-use cosmic::Action::App;
 use cosmic::applet::Size;
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::{Limits, Subscription};
 use cosmic::prelude::*;
 use cosmic::widget;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::LazyLock;
 use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::ExtWorkspaceHandleV1;
 
 static AUTOSIZE_MAIN_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("autosize-main"));
 
-/// The application model stores app-specific state used to describe its interface and
-/// drive its logic.
-#[derive(Default)]
 pub struct AppModel {
     /// Application state which is managed by the COSMIC runtime.
     core: cosmic::Core,
@@ -28,18 +24,15 @@ pub struct AppModel {
     /// Current applications
     workspace_toplevels: HashMap<ExtWorkspaceHandleV1, Vec<AppToplevel>>,
     /// App icon cache
-    app_icons: HashMap<String, widget::icon::Icon>,
+    app_icons: Icons
 }
 
-/// Messages emitted by the application and its widgets.
 #[derive(Debug, Clone)]
 pub enum Message {
     UpdateConfig(Config),
     WaylandEvent(WaylandEvent),
-    IconLoaded(String, Option<PathBuf>),
 }
 
-/// Create a COSMIC application from the app model
 impl AppModel {
     fn get_workspace_toplevels(&self, workspace: &AppWorkspace) -> Vec<AppToplevel> {
         let res = self.workspace_toplevels.get(&workspace.handle);
@@ -48,10 +41,6 @@ impl AppModel {
         } else {
             Vec::new()
         }
-    }
-
-    fn should_load_app_icon(&self, app_id: &str) -> bool {
-        !self.app_icons.contains_key(app_id)
     }
 
     fn new_workspace_button(&self, workspace: &AppWorkspace) -> Element<'_, Message> {
@@ -143,22 +132,9 @@ impl AppModel {
         is_active: bool,
         icon_size: u16,
     ) -> Element<'_, Message> {
-        let icon = self.app_icons.get(app_id);
-
-        let element = if let Some(icon) = icon {
-            icon.clone()
-                .size(icon_size)
-                .into()
-        } else {
-            const FALLBACK_ICON: &[u8] = include_bytes!("../resources/fallback-icon.svg");
-            widget::icon::from_svg_bytes(FALLBACK_ICON)
-                .icon()
-                .size(icon_size)
-                .into()
-        };
-
+        let icon = self.app_icons.get_icon(app_id).size(icon_size).into();
         if is_active {
-            widget::container(element)
+            widget::container(icon)
                 .style(move |theme: &Theme| {
                     let cosmic = theme.cosmic();
                     widget::container::Style {
@@ -174,7 +150,7 @@ impl AppModel {
                 })
                 .into()
         } else {
-            element
+            icon
         }
     }
 }
@@ -207,6 +183,8 @@ impl cosmic::Application for AppModel {
     ) -> (Self, Task<cosmic::Action<Self::Message>>) {
         // Construct the app model with the runtime's core.
         let app = AppModel {
+            workspace_toplevels: HashMap::new(),
+            workspaces: Vec::new(),
             core,
             config: cosmic_config::Config::new(Self::APP_ID, Config::VERSION)
                 .map(|context| match Config::get_entry(&context) {
@@ -220,7 +198,7 @@ impl cosmic::Application for AppModel {
                     }
                 })
                 .unwrap_or_default(),
-            ..Default::default()
+            app_icons: Icons::new(),
         };
 
         (app, Task::none())
@@ -260,40 +238,19 @@ impl cosmic::Application for AppModel {
                 self.workspaces.sort_by_key(|ws| ws.coordinates);
             }
             Message::WaylandEvent(WaylandEvent::ToplevelsUpdated(
-                changed_toplevel_id,
                 ws_toplevels,
             )) => {
                 let mut transformed = HashMap::new();
-                let mut app_id: Option<String> = None;
                 for (ws_id, toplevels_by_id) in ws_toplevels {
-                    let mut toplevels: Vec<AppToplevel> =
-                        toplevels_by_id.values().cloned().collect();
+                    let mut toplevels: Vec<AppToplevel> = Vec::new();
+                    for toplevel in toplevels_by_id.values() {
+                        self.app_icons.load_icon_if_missing(&toplevel.app_id);
+                        toplevels.push(toplevel.clone());
+                    }
                     toplevels.sort_by_key(|tl| tl.coordinates);
                     transformed.insert(ws_id, toplevels);
-                    if let Some(changed_toplevel) = toplevels_by_id.get(&changed_toplevel_id) {
-                        // FIXME: This is used for, later, checking if we have the app icon and fetching if we do not.
-                        //        Looks pretty hacky, we should do this somewhere else...
-                        app_id = Some(changed_toplevel.app_id.clone())
-                    }
                 }
                 self.workspace_toplevels = transformed;
-                // Load icon for changed toplevel if we do not have it already
-                if let Some(app_id) = app_id
-                    && self.should_load_app_icon(app_id.as_str())
-                {
-                    return Task::perform(load_app_icon(app_id.to_string()), move |path| {
-                        App(Message::IconLoaded(app_id.clone(), path))
-                    });
-                }
-            }
-            Message::IconLoaded(app_id, icon_path) => {
-                let icon = if let Some(icon_path) = icon_path {
-                    widget::icon::from_path(icon_path).icon()
-                } else {
-                    const FALLBACK_ICON: &[u8] = include_bytes!("../resources/fallback-icon.svg");
-                    widget::icon::from_svg_bytes(FALLBACK_ICON).icon()
-                };
-                self.app_icons.insert(app_id, icon);
             }
         }
         Task::none()
@@ -345,107 +302,3 @@ impl cosmic::Application for AppModel {
     }
 }
 
-async fn load_app_icon_path(app_id: String) -> Option<PathBuf> {
-    tokio::task::spawn_blocking(move || {
-        // Try direct lookup first
-        if let Some(path) = freedesktop_icons::lookup(&app_id)
-            .with_size(16)
-            .with_cache()
-            .find()
-        {
-            return Some(path);
-        }
-
-        // Try case-insensitive lookup
-        let app_id_lower = app_id.to_lowercase();
-        if let Some(path) = freedesktop_icons::lookup(&app_id_lower)
-            .with_size(16)
-            .with_cache()
-            .find()
-        {
-            return Some(path);
-        }
-
-        // Search desktop files for matching StartupWMClass
-        if let Some(icon_name) = find_icon_from_desktop_file(&app_id) {
-            // Try the icon name from desktop file
-            if let Some(path) = freedesktop_icons::lookup(&icon_name)
-                .with_size(16)
-                .with_cache()
-                .find()
-            {
-                return Some(path);
-            }
-
-            // If icon is an absolute path, use it directly
-            if std::path::Path::new(&icon_name).is_absolute()
-                && std::path::Path::new(&icon_name).exists()
-            {
-                return Some(PathBuf::from(icon_name));
-            }
-        }
-
-        // No icon found
-        None
-    })
-        .await
-        .unwrap_or_default()
-}
-async fn load_app_icon(app_id: String) -> Option<PathBuf> {
-    load_app_icon_path(app_id).await
-}
-
-fn find_icon_from_desktop_file(app_id: &str) -> Option<String> {
-    use std::fs;
-    use std::io::{BufRead, BufReader};
-
-    // Get data directories with proper defaults
-    let xdg_data_home = std::env::var("XDG_DATA_HOME").ok().or_else(|| {
-        std::env::var("HOME")
-            .ok()
-            .map(|home| format!("{}/.local/share", home))
-    });
-    let xdg_data_dirs = std::env::var("XDG_DATA_DIRS")
-        .ok()
-        .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string());
-
-    // Build search paths
-    let mut search_paths = Vec::new();
-    if let Some(data_home) = xdg_data_home {
-        search_paths.push(data_home);
-    }
-    for dir in xdg_data_dirs.split(':') {
-        search_paths.push(dir.to_string());
-    }
-
-    let icon_name = search_paths.iter().find_map(|dir| {
-        let app_dir = format!("{}/applications", dir);
-        if let Ok(entries) = fs::read_dir(app_dir) {
-            for entry in entries.flatten() {
-                if let Ok(file) = fs::File::open(entry.path()) {
-                    let reader = BufReader::new(file);
-                    let mut icon_name = None;
-                    let mut matches = false;
-
-                    for line in reader.lines().flatten() {
-                        if line.starts_with("Icon=") {
-                            icon_name = Some(line[5..].to_string());
-                        } else if line.starts_with("StartupWMClass=") {
-                            let wm_class = &line[15..];
-                            if wm_class.eq_ignore_ascii_case(app_id) {
-                                matches = true;
-                            }
-                        }
-                    }
-
-                    if matches && icon_name.is_some() {
-                        return icon_name;
-                    }
-                }
-            }
-        }
-        None
-    });
-
-    icon_name
-}

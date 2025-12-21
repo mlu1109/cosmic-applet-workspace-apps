@@ -23,7 +23,6 @@ use cosmic::iced;
 use futures_channel::mpsc;
 use futures_util::StreamExt;
 use std::{collections::HashMap, thread};
-use cosmic::iced::window::get_mode;
 use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1;
 use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::ExtWorkspaceHandleV1;
 
@@ -31,7 +30,6 @@ use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::ExtW
 pub enum WaylandEvent {
     WorkspacesChanged(Vec<AppWorkspace>),
     ToplevelsUpdated(
-        ExtForeignToplevelHandleV1,
         HashMap<ExtWorkspaceHandleV1, HashMap<ExtForeignToplevelHandleV1, AppToplevel>>,
     ),
 }
@@ -67,7 +65,7 @@ pub struct AppToplevel {
     pub app_id: String,
     pub is_active: bool,
     pub ws_handle: ExtWorkspaceHandleV1,
-    pub coordinates: (i32, i32),
+    pub coordinates: (i32, i32)
 }
 
 impl AppToplevel {
@@ -309,10 +307,8 @@ impl ToplevelInfoHandler for AppData {
         handle: &ExtForeignToplevelHandleV1,
     ) {
         if let Some(tl) = self.get_toplevel_from_handle(handle) {
-            let tl_id = tl.handle.clone();
             self.add_top_level(tl);
             self.send_event(WaylandEvent::ToplevelsUpdated(
-                tl_id,
                 self.workspace_toplevels.clone(),
             ));
         } else {
@@ -336,10 +332,8 @@ impl ToplevelInfoHandler for AppData {
                 .map(|old_app_top_level| *old_app_top_level == new_app_toplevel)
                 .unwrap_or(false);
             if !equals {
-                let tl_id = new_app_toplevel.handle.clone();
                 self.add_top_level(new_app_toplevel);
                 self.send_event(WaylandEvent::ToplevelsUpdated(
-                    tl_id,
                     self.workspace_toplevels.clone(),
                 ));
             } else {
@@ -365,7 +359,6 @@ impl ToplevelInfoHandler for AppData {
             let removed = self.remove_toplevel(&tl_id);
             if removed {
                 self.send_event(WaylandEvent::ToplevelsUpdated(
-                    tl_id,
                     self.workspace_toplevels.clone(),
                 ));
             }

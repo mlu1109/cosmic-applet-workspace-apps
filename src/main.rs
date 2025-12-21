@@ -4,6 +4,8 @@ mod app;
 mod config;
 mod i18n;
 mod wayland_subscription;
+mod icons;
+mod desktop_matcher;
 
 fn main() -> cosmic::iced::Result {
     // Get the system's preferred languages.
