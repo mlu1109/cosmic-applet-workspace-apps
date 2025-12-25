@@ -24,7 +24,7 @@ pub struct AppModel {
     /// Current applications
     workspace_toplevels: HashMap<ExtWorkspaceHandleV1, Vec<AppToplevel>>,
     /// App icon cache
-    app_icons: Icons
+    app_icons: Icons,
 }
 
 #[derive(Debug, Clone)]
@@ -132,9 +132,10 @@ impl AppModel {
         is_active: bool,
         icon_size: u16,
     ) -> Element<'_, Message> {
-        let icon = self.app_icons.get_icon(app_id).size(icon_size).into();
+        let icon = self.app_icons.get_icon(app_id).size(icon_size);
+        let container = widget::container(icon).center(icon_size as f32 + 4.0);
         if is_active {
-            widget::container(icon)
+            container
                 .style(move |theme: &Theme| {
                     let cosmic = theme.cosmic();
                     widget::container::Style {
@@ -150,7 +151,7 @@ impl AppModel {
                 })
                 .into()
         } else {
-            icon
+            container.into()
         }
     }
 }
@@ -237,9 +238,7 @@ impl cosmic::Application for AppModel {
                 self.workspaces = workspaces;
                 self.workspaces.sort_by_key(|ws| ws.coordinates);
             }
-            Message::WaylandEvent(WaylandEvent::ToplevelsUpdated(
-                ws_toplevels,
-            )) => {
+            Message::WaylandEvent(WaylandEvent::ToplevelsUpdated(ws_toplevels)) => {
                 let mut transformed = HashMap::new();
                 for (ws_id, toplevels_by_id) in ws_toplevels {
                     let mut toplevels: Vec<AppToplevel> = Vec::new();
@@ -301,4 +300,3 @@ impl cosmic::Application for AppModel {
         Some(cosmic::applet::style())
     }
 }
-
