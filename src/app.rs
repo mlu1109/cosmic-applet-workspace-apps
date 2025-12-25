@@ -84,7 +84,7 @@ impl AppModel {
         let ws_top_levels = self.get_workspace_toplevels(workspace);
 
         if !ws_top_levels.is_empty() {
-            content = content.push(widget::horizontal_space().width(spacing));
+            content = content.push(widget::horizontal_space().width(spacing + 2.0));
         }
 
         for toplevel in ws_top_levels {
