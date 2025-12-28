@@ -17,7 +17,6 @@ An applet for the COSMIC desktop that displays workspace numbers and icons for o
 - Shows numbers for open workspaces
 - Shows icons for open applications in each workspace
 - Indicates which workspace and application that is currently active
-  - (the active application indicator does not work very well... yet)
 
 ## Installation
 
