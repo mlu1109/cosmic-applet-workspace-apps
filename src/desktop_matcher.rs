@@ -13,11 +13,9 @@ pub struct DesktopEntry {
 
 /// Desktop file matcher that searches for .desktop files matching an app ID
 pub struct DesktopMatcher {
-    /// Cache of desktop entries indexed by filename (without .desktop extension)
+    /// Cache of desktop entries indexed by lowercase filename (without .desktop extension)
     filename_index: HashMap<String, DesktopEntry>,
-    /// Cache of desktop entries indexed by lowercase filename
-    lowercase_filename_index: HashMap<String, DesktopEntry>,
-    /// Cache of desktop entries indexed by StartupWMClass
+    /// Cache of desktop entries indexed by lowercase StartupWMClass
     wm_class_index: HashMap<String, DesktopEntry>,
 }
 
@@ -26,7 +24,6 @@ impl DesktopMatcher {
     pub fn new() -> Self {
         let mut matcher = Self {
             filename_index: HashMap::new(),
-            lowercase_filename_index: HashMap::new(),
             wm_class_index: HashMap::new(),
         };
         matcher.scan_directories();
@@ -56,25 +53,18 @@ impl DesktopMatcher {
         }
     }
 
-    /// Index a desktop entry for fast lookup
+    /// Index a desktop entry for fast lookup (case-insensitive)
     pub fn index_entry(&mut self, entry: DesktopEntry) {
         if let Some(filename) = entry.path.file_stem().and_then(|s| s.to_str()) {
-            let filename_str = filename.to_string();
-            
-            // Index by exact filename (only if not already present - first one wins)
+            // Index by lowercase filename (first one wins)
             self.filename_index
-                .entry(filename_str.clone())
+                .entry(filename.to_lowercase())
                 .or_insert_with(|| entry.clone());
             
-            // Index by lowercase filename for case-insensitive search
-            self.lowercase_filename_index
-                .entry(filename_str.to_lowercase())
-                .or_insert_with(|| entry.clone());
-            
-            // Index by StartupWMClass if present
+            // Index by lowercase StartupWMClass if present
             if let Some(ref wm_class) = entry.startup_wm_class {
                 self.wm_class_index
-                    .entry(wm_class.clone())
+                    .entry(wm_class.to_lowercase())
                     .or_insert(entry);
             }
         }
@@ -122,23 +112,19 @@ impl DesktopMatcher {
         })
     }
 
-    /// Find a desktop file matching the given app ID
+    /// Find a desktop file matching the given app ID (case-insensitive)
     /// 
     /// Tries multiple strategies in order:
-    /// 1. Exact filename match
+    /// 1. Filename match
     /// 2. StartupWMClass match
-    /// 3. Case-insensitive filename match
     pub fn find_desktop_file(&self, app_id: &str) -> Option<&DesktopEntry> {
-        if let Some(entry) = self.filename_index.get(app_id) {
-            return Some(entry);
-        }
-        
-        if let Some(entry) = self.wm_class_index.get(app_id) {
-            return Some(entry);
-        }
-        
         let app_id_lower = app_id.to_lowercase();
-        if let Some(entry) = self.lowercase_filename_index.get(&app_id_lower) {
+        
+        if let Some(entry) = self.filename_index.get(&app_id_lower) {
+            return Some(entry);
+        }
+        
+        if let Some(entry) = self.wm_class_index.get(&app_id_lower) {
             return Some(entry);
         }
         
